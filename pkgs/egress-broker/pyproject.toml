@@ -1,0 +1,21 @@
+[project]
+name = "egress-broker"
+version = "1.0.0"
+description = "Protocol-transparent OpenAI-compatible proxy that keeps the inference credential outside the agentic perimeter"
+requires-python = ">=3.12"
+dependencies = [
+    "starlette>=0.41",
+    "uvicorn>=0.32",
+    "httpx>=0.28",
+    "prometheus-client>=0.21",
+]
+
+[project.scripts]
+egress-broker = "egress_broker.main:run"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/egress_broker"]
