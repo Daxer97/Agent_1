@@ -181,7 +181,7 @@ all.
 .
 ├── flake.nix                    single point of truth; builds every guest
 ├── flake.lock                   resolved inputs — generated, see below
-├── parameters.example.nix       site parameter template (copy to parameters.nix)
+├── parameters.example.nix       site overrides template (copy to parameters.nix)
 ├── .sops.yaml                   per-host encryption rules for the bootstrap secrets
 ├── .env.example                 runtime variables, documented by secret-store path
 │
@@ -333,13 +333,33 @@ An authentication error from the gateway is a pass: it proves reachability.
 
 ### F-02 — Guests and network topology
 
-Fill in the parameters, then let the flake generate the provisioning commands:
+Every option already defaults to the proposed value of the variable matrix, so
+this step is a review rather than a transcription. Copy the template, supply
+the four values the matrix does not propose — the three image digests and the
+backup encryption recipient — change whatever differs on this node, and record
+that the rest were checked:
 
 ```sh
 cp parameters.example.nix parameters.nix
 $EDITOR parameters.nix                       # then set parametersReviewed = true
+$EDITOR .sops.yaml                           # register the age keys, once known
 nix flake check                              # fails while a placeholder survives
+```
 
+The placeholder check exempts files named `*.example.*`: those are templates,
+and their markers are the point. It sees the copies — `parameters.nix`,
+`.sops.yaml`, and whatever the user file and evaluation dataset are pointed at.
+
+To see what the defaults resolve to before changing anything:
+
+```sh
+nix eval .#nixosConfigurations.hrm-app.config.hermes --json | jq
+```
+
+Then let the flake generate the provisioning commands from the same inventory
+the guests are built from:
+
+```sh
 nix run .#provision-guests -- create         # run on the node
 nix run .#provision-guests -- status
 ```
@@ -671,86 +691,102 @@ then confirm that a fact predating the backup is retrievable.
 
 ## Compile-time variables
 
-These are declared in `parameters.nix` and resolved when the configuration is
-built. They end up in the Nix store, which is readable by every user of the
-system: **no secret belongs here.** Runtime secrets are documented in
-[`.env.example`](.env.example).
+These are resolved when the configuration is built. They end up in the Nix
+store, which is readable by every user of the system: **no secret belongs
+here.** Runtime secrets are documented in [`.env.example`](.env.example).
 
-The `Default` column follows one rule throughout. A parameter encoding an
-architectural decision carries a default, and that default records what was
-decided. A parameter encoding a fact about a specific installation carries
-none — shown as **—** — because an undefined parameter is reported by name at
-evaluation time, which is better than a plausible value that happens to be
-wrong.
+**Every default below is the proposed value of the deployment variable
+matrix.** Taken together they describe a complete, coherent installation —
+the sizing, the addressing, the thresholds and the model selection of the
+reference deployment — which is why the configuration evaluates before any
+parameter has been supplied, and why `parameters.nix` holds only what a given
+site changes.
+
+That has one consequence worth stating plainly. A default that is plausible is
+not a default that was checked. The type system rejects a malformed address; it
+cannot reject a well-formed address belonging to a different network. This is
+what `hermes.parametersReviewed` is for, and why it is the one option with no
+default at all.
+
+Four further options have no default because the matrix proposes none: the
+three container image digests, which are read from a registry rather than
+chosen, and the backup encryption recipient, which is a security decision.
+They are shown as **—** and are reported by name at evaluation time.
+
+Where a default derives from another option rather than from a literal, it is
+shown as an expression — the guest inventory is the single place an address is
+written, and the components that need one follow it.
 
 ### Review gate
 
 | Variable | Type | Description | Default |
 | --- | --- | --- | --- |
-| `hermes.parametersReviewed` | boolean | Acknowledgement that every parameter has been checked against the site it describes. The configuration refuses to evaluate while it is false. Types cannot distinguish a plausible address from the right one; this is where somebody states that they checked. | — |
+| `hermes.parametersReviewed` | boolean | Acknowledgement that the parameters were checked against the site they describe. The configuration refuses to evaluate while it is false. | — |
 
 ### Node and storage
 
 | Variable | Type | Description | Default |
 | --- | --- | --- | --- |
-| `hermes.site.storage.default` | string | Storage pool backing the guests that have no dedicated device. | — |
-| `hermes.site.storage.memory` | string | Storage pool dedicated to the memory guest. Must be a physically separate device. | — |
+| `hermes.site.storage.default` | string | Storage pool backing the guests that have no dedicated device. | `local-lvm` |
+| `hermes.site.storage.memory` | string | Storage pool dedicated to the memory guest. Must be a physically separate device: a vector index on slow storage produces a retrieval failure that gets blamed on the memory backend. Rename it before the first guest is created, not after. | `nvme-mem` |
 | `hermes.site.storage.fsyncMinimum` | integer | Lowest acceptable fsync rate on the pool hosting the vector index, in operations per second. | `200` |
-| `hermes.site.backupTarget` | string | Storage receiving guest-level backups. | — |
-| `hermes.site.backupMountPoint` | path | Mount point of the backup storage on the node. | — |
+| `hermes.site.backupTarget` | string | Storage receiving guest-level backups. | `Unraid` |
+| `hermes.site.backupMountPoint` | path | Mount point of the backup storage on the node. Proxmox derives it by convention from the storage identifier, whatever the exported path is. | `/mnt/pve/${site.backupTarget}` |
 | `hermes.site.numa` | boolean | Expose a NUMA topology to the guests. Enable only on a node with more than one node. | `false` |
 
 ### Network
 
 | Variable | Type | Description | Default |
 | --- | --- | --- | --- |
-| `hermes.network.timeZone` | string | Time zone of the guests. | — |
-| `hermes.network.nameservers` | list of IPv4 | Resolvers configured on the guests. | — |
-| `hermes.network.ntpServers` | list of string | Time sources. Correlated telemetry across guests depends on them. | — |
-| `hermes.network.bridge` | string | VLAN-aware bridge the guest interfaces attach to. | — |
-| `hermes.network.managementCidr` | CIDR | The only range from which administrative access is accepted. | — |
-| `hermes.network.zones.edge.vlanId` | integer, 1–4094 | VLAN carrying the user-facing zone. | — |
-| `hermes.network.zones.edge.cidr` | CIDR | Range of the user-facing zone. | — |
-| `hermes.network.zones.app.vlanId` | integer, 1–4094 | VLAN carrying the application zone. | — |
-| `hermes.network.zones.app.cidr` | CIDR | Range of the application zone. | — |
-| `hermes.network.zones.data.vlanId` | integer, 1–4094 | VLAN carrying the data zone. | — |
-| `hermes.network.zones.data.cidr` | CIDR | Range of the data zone. Not routable from the user network. | — |
-| `hermes.network.perimeterFirewall` | string | Device applying the perimeter policy, and therefore the only place the outbound restriction to the gateway *by name* can be expressed. | — |
-| `hermes.network.egressPolicy` | `direct` \| `proxy` | Whether outbound traffic reaches the gateway directly or through a proxy. | `direct` |
-| `hermes.network.containerHostAddress` | IPv4 | Host side of the private network shared with the agentic containers. | — |
-| `hermes.network.containerInteractiveAddress` | IPv4 | Address of the interactive-plane container. | — |
-| `hermes.network.containerProgrammaticAddress` | IPv4 | Address of the programmatic-plane container. | — |
+| `hermes.network.timeZone` | string | Time zone of the guests. | `Europe/Rome` |
+| `hermes.network.nameservers` | list of IPv4 | Resolvers configured on the guests. | `[ "192.168.1.1" ]` |
+| `hermes.network.ntpServers` | list of string | Time sources. Correlating telemetry across guests depends on them. | `[ "192.168.1.1" ]` |
+| `hermes.network.bridge` | string | VLAN-aware bridge the guest interfaces attach to. | `vmbr0` |
+| `hermes.network.managementCidr` | CIDR | The only range from which administrative access is accepted. | `192.168.1.0/24` |
+| `hermes.network.zones.edge.vlanId` | integer, 1–4094 | VLAN carrying the user-facing zone. | `100` |
+| `hermes.network.zones.edge.cidr` | CIDR | Range of the user-facing zone. | `10.100.0.0/24` |
+| `hermes.network.zones.app.vlanId` | integer, 1–4094 | VLAN carrying the application zone. | `101` |
+| `hermes.network.zones.app.cidr` | CIDR | Range of the application zone. | `10.101.0.0/24` |
+| `hermes.network.zones.data.vlanId` | integer, 1–4094 | VLAN carrying the data zone. | `102` |
+| `hermes.network.zones.data.cidr` | CIDR | Range of the data zone. Not routable from the user network. | `10.102.0.0/24` |
+| `hermes.network.perimeterFirewall` | string | Device applying the perimeter policy, and the only place able to restrict outbound traffic to the gateway *by name*. Where none exists, that restriction is enforced nowhere and the residual risk is carried knowingly. | `none — 802.1Q router with SVI gateways only` |
+| `hermes.network.egressPolicy` | `direct` \| `proxy` | Whether outbound traffic reaches the gateway directly or through a proxy. Changing it is a departure from the declared assumption and must be recorded. | `direct` |
+| `hermes.network.containerHostAddress` | IPv4 | Host side of the private network shared with the agentic containers. | `10.111.0.1` |
+| `hermes.network.containerInteractiveAddress` | IPv4 | Address of the interactive-plane container. | `10.111.0.2` |
+| `hermes.network.containerProgrammaticAddress` | IPv4 | Address of the programmatic-plane container. | `10.111.0.3` |
 
 ### Guests
 
-Declared per role under `hermes.guests.<role>`, where `<role>` is one of
-`ingress`, `agent`, `memory`, `secrets`, `observability`.
+Each guest is a set of independent options under `hermes.guests.<role>`, so
+overriding one field keeps the defaults of every other. The start order is
+binding rather than conventional: a service started before the secret store
+does not find its credentials and fails in a way that is not always evident.
 
-| Variable | Type | Description | Default |
-| --- | --- | --- | --- |
-| `hostName` | string | Host name of the guest, and the name of its NixOS configuration. | role name |
-| `vmid` | integer | Proxmox VMID. Must be free on the node before provisioning. | — |
-| `cores` | integer | Virtual CPUs. Proxmox refuses to start a guest whose count exceeds the physical cores. | — |
-| `memoryMb` | integer | Fixed memory assignment. Ballooning is disabled. | — |
-| `diskGb` | integer | Size of the root volume. | — |
-| `storage` | string | Storage pool backing the root volume. | — |
-| `diskFormat` | `raw` \| `qcow2` | Image format. On a directory-backed pool `qcow2` is mandatory: with `raw` there are no per-phase snapshots and the installation loses its rollback points. | `raw` |
-| `extraDisks` | list of volume | Additional volumes, each with `sizeGb`, `storage` and `mountPoint`. | `[ ]` |
-| `zone` | `edge` \| `app` \| `data` | Primary network zone. | — |
-| `address` | IPv4 | Address of the primary interface. | — |
-| `extraInterfaces` | list of interface | Additional interfaces, each with `zone` and `address`. Only the ingress guest is dual-homed. | `[ ]` |
-| `bootOrder` | integer, 1–5 | Start order. Binding rather than conventional: a service started before the secret store does not find its credentials. | — |
-| `bootDelay` | integer | Seconds before the next guest in the order is released. | `30` |
-| `cpuLimit` | float or null | Node CPU share, where `1.0` is a full core. Set on the agentic guest so a delegation fan-out cannot saturate the node. | `null` |
-| `aliasOf` | string or null | Role hosting this one. An aliased guest is not created. The agentic role is never a valid target. | `null` |
+| Variable | Type | Description | `secrets` | `memory` | `agent` | `ingress` | `observability` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `hostName` | string | Host name, and the name of the NixOS configuration. | `hrm-sec` | `hrm-mem` | `hrm-app` | `hrm-edge` | `hrm-sec` |
+| `vmid` | integer | Proxmox VMID. Must be free on the node. | `204` | `203` | `202` | `201` | `204` |
+| `cores` | integer | Virtual CPUs. Proxmox refuses to start a guest whose count exceeds the physical cores. | `2` | `4` | `4` | `2` | `2` |
+| `memoryMb` | integer | Fixed memory. Ballooning is disabled. | `2048` | `4096` | `4096` | `2048` | `2048` |
+| `diskGb` | integer | Size of the root volume. | `24` | `40` | `32` | `20` | `24` |
+| `storage` | string | Pool backing the root volume. | `local-lvm` | `nvme-mem` | `local-lvm` | `local-lvm` | `local-lvm` |
+| `diskFormat` | `raw` \| `qcow2` | Image format. On a directory-backed pool `qcow2` is mandatory: with `raw` there are no per-phase snapshots and the installation loses its rollback points. | `raw` | `qcow2` | `raw` | `raw` | `raw` |
+| `zone` | `edge` \| `app` \| `data` | Primary network zone. | `data` | `data` | `app` | `edge` | `data` |
+| `address` | IPv4 | Address of the primary interface. | `10.102.0.14` | `10.102.0.13` | `10.101.0.12` | `10.100.0.11` | `10.102.0.14` |
+| `bootOrder` | integer, 1–5 | Start order on the node. | `1` | `2` | `3` | `4` | `5` |
+| `bootDelay` | integer | Seconds before the next guest is released. | `30` | `30` | `30` | `30` | `30` |
+| `cpuLimit` | float or null | Node CPU share, where `1.0` is a full core. Set on the agentic guest so a delegation fan-out cannot saturate the node. | `null` | `null` | `3.5` | `null` | `null` |
+| `aliasOf` | string or null | Role hosting this one. An aliased guest is not created. The agentic role is never a valid target. | `null` | `null` | `null` | `null` | `"secrets"` |
+| `extraInterfaces` | list of `{ zone, address }` | Additional interfaces. Only the ingress guest is dual-homed, and every flow towards a downstream service is admitted from its application interface alone. | `[ ]` | `[ ]` | `[ ]` | `[{ zone = "app"; address = "10.101.0.11"; }]` | `[ ]` |
+| `extraDisks` | list of `{ sizeGb, storage, mountPoint }` | Additional volumes. The one on the secret store guest holds the observability state on a filesystem of its own — declared allocation: metrics ≤ 2 GiB, logs ≤ 8, evaluation platform ≤ 16, 6 in reserve. When it fills up what is lost is observability; without it, what is lost is the vault. | `[{ sizeGb = 32; storage = "local-lvm"; mountPoint = "/var/lib/observability"; }]` | `[ ]` | `[ ]` | `[ ]` | `[ ]` |
 
 ### Build and provisioning
 
 | Variable | Type | Description | Default |
 | --- | --- | --- | --- |
-| `hermes.nix.stateVersion` | string | NixOS state version of the guests. Never raised as a side effect of an unrelated change. | — |
-| `hermes.nix.substituters` | list of string | Binary caches consulted during a rebuild. | — |
-| `hermes.nix.buildHost` | string or null | Host performing the builds. The agentic guest denies outbound traffic and has no working local build path. | `null` |
+| `hermes.nix.stateVersion` | string | NixOS state version of the guests. Never raised as a side effect of an unrelated change. | `25.05` |
+| `hermes.nix.substituters` | list of string | Binary caches consulted during a rebuild. | `[ "https://cache.nixos.org" ]` |
+| `hermes.nix.buildHost` | string or null | Host performing the builds. The agentic guest denies outbound traffic and has no working local build path. The matrix proposes the administration workstation, which is a decision to record rather than a value to derive. | `null` |
 | `hermes.nix.provisioningMethod` | `iso` \| `nixos-anywhere` \| `template-clone` | Method used for the first installation of a guest. | `nixos-anywhere` |
 | `hermes.nix.sopsAgeKeyPath` | path | Private key from which the age identity is derived. Deriving it from the host key means there is no extra key to distribute. | `/etc/ssh/ssh_host_ed25519_key` |
 
@@ -758,14 +794,14 @@ Declared per role under `hermes.guests.<role>`, where `<role>` is one of
 
 | Variable | Type | Description | Default |
 | --- | --- | --- | --- |
-| `hermes.secretStore.address` | IPv4 | Address of the store as reached by the other guests. | — |
+| `hermes.secretStore.address` | IPv4 | Address of the store as reached by the other guests. | `${guests.secrets.address}` |
 | `hermes.secretStore.port` | port | API port. Always TLS, including on the internal network. | `8200` |
 | `hermes.secretStore.clusterPort` | port | Cluster port. | `8201` |
-| `hermes.secretStore.mount` | string | Mount point of the key-value engine holding the operational secrets. | — |
-| `hermes.secretStore.unsealMethod` | `shamir-manual` \| `auto-unseal` | How the store is unsealed after a restart. With the manual method a reboot needs a human, which is a legitimate choice and one worth knowing in advance. | `shamir-manual` |
-| `hermes.secretStore.keyShares` | integer | Unseal key shares produced at initialisation. | `3` |
+| `hermes.secretStore.mount` | string | Mount point of the key-value engine holding the operational secrets. | `hermes` |
+| `hermes.secretStore.unsealMethod` | `shamir-manual` \| `auto-unseal` | How the store is unsealed after a restart. With the manual method a reboot needs a human before any dependent service can start — a legitimate choice, and one worth knowing in advance. | `shamir-manual` |
+| `hermes.secretStore.keyShares` | integer | Unseal key shares produced at initialisation. They must not be kept on this guest. | `3` |
 | `hermes.secretStore.keyThreshold` | integer | Shares required to unseal. | `2` |
-| `hermes.secretStore.auditPath` | path | Directory holding the audit device — the documentary evidence that the policy separation is enforced. | — |
+| `hermes.secretStore.auditPath` | path | Directory holding the audit device — the documentary evidence that the policy separation is enforced. | `/var/log/openbao` |
 | `hermes.secretStore.tokenTtl` | duration | Lifetime of a token issued to a machine identity. | `1h` |
 | `hermes.secretStore.tokenMaxTtl` | duration | Upper bound on token renewal. | `24h` |
 | `hermes.secretStore.renderInterval` | duration | Interval at which the agent re-renders static secrets. | `5m` |
@@ -777,15 +813,15 @@ Declared per role under `hermes.guests.<role>`, where `<role>` is one of
 
 | Variable | Type | Description | Default |
 | --- | --- | --- | --- |
-| `hermes.broker.listenAddress` | IPv4 | Address the broker binds to. | — |
-| `hermes.broker.host` | IPv4 | Address of the broker as seen by its clients. | — |
+| `hermes.broker.listenAddress` | IPv4 | Address the broker binds to. | `${guests.agent.address}` |
+| `hermes.broker.host` | IPv4 | Address of the broker as seen by its clients. | `${guests.agent.address}` |
 | `hermes.broker.port` | port | Port of the broker. | `8081` |
 | `hermes.broker.upstream` | string | Base address of the inference gateway. The only component allowed to reach it. | `https://openrouter.ai/api/v1` |
-| `hermes.broker.uid` | integer | System user of the broker. The outbound rules distinguish processes by user, because the broker and the agentic containers share a guest. | — |
+| `hermes.broker.uid` | integer | System user of the broker. The outbound rules distinguish processes by user, because the broker and the agentic containers share a guest. | `992` |
 | `hermes.broker.maxConnections` | integer | Concurrent connections towards the gateway. | `32` |
-| `hermes.broker.reserveInteractive` | float, 0–1 | Share of the connection budget reserved for the interactive plane. | — |
-| `hermes.broker.budgetSoft` | float | Spend threshold, per plane and profile, that raises an alert. | — |
-| `hermes.broker.budgetHard` | float | Spend threshold that rejects further requests. Enforcement lags by one request, because the real cost is read back from the gateway rather than estimated. | — |
+| `hermes.broker.reserveInteractive` | float, 0–1 | Share of the connection budget reserved for the interactive plane. | `0.7` |
+| `hermes.broker.budgetSoft` | float | Spend threshold, per plane and profile, that raises an alert. | `20.0` |
+| `hermes.broker.budgetHard` | float | Spend threshold that rejects further requests. Enforcement lags by one request, because the real cost is read back from the gateway rather than estimated. | `50.0` |
 | `hermes.broker.budgetWindowSeconds` | integer | Length of the rolling spend window. | `86400` |
 | `hermes.broker.timeout` | duration | Upper bound on a single gateway request. | `600s` |
 | `hermes.broker.replicas` | integer | Local instances. A single instance is a single point of failure for both planes. | `1` |
@@ -795,55 +831,55 @@ Declared per role under `hermes.guests.<role>`, where `<role>` is one of
 | Variable | Type | Description | Default |
 | --- | --- | --- | --- |
 | `hermes.memory.postgres.image` | image reference | Digest-pinned image of the relational store. The type rejects a tag: a tag is a moving reference. | — |
-| `hermes.memory.postgres.user` | string | Database role used by the memory backend. | — |
-| `hermes.memory.postgres.database` | string | Database holding the knowledge store. | — |
-| `hermes.memory.postgres.schema` | string | Schema holding the knowledge store. Never the default schema. | — |
-| `hermes.memory.postgres.dataPath` | path | Persistent volume of the store. | — |
-| `hermes.memory.postgres.uid` | integer | Owner of the persistent volume. | — |
-| `hermes.memory.postgres.vectorExtension` | string | Extension providing the vector index and nearest-neighbour search. | — |
+| `hermes.memory.postgres.user` | string | Database role used by the memory backend. | `hindsight` |
+| `hermes.memory.postgres.database` | string | Database holding the knowledge store. | `hindsight` |
+| `hermes.memory.postgres.schema` | string | Schema holding the knowledge store. Never the default schema. | `hindsight` |
+| `hermes.memory.postgres.dataPath` | path | Persistent volume of the store. | `/var/lib/postgresql/data` |
+| `hermes.memory.postgres.uid` | integer | Owner of the persistent volume. | `999` |
+| `hermes.memory.postgres.vectorExtension` | string | Extension providing the vector index and nearest-neighbour search. | `pgvector` |
 | `hermes.memory.hindsight.image` | image reference | Digest-pinned image of the memory backend. | — |
 | `hermes.memory.hindsight.apiPort` | port | Port serving retention, retrieval and synthesis. | `8888` |
 | `hermes.memory.hindsight.controlPlanePort` | port | Port serving the inspection console. | `9999` |
-| `hermes.memory.hindsight.tenant` | string | Tenant the banks belong to. | — |
-| `hermes.memory.hindsight.workerId` | string | Stable worker identity. Without it the worker adopts the container host name and an operation in flight stays parked under an identifier nobody claims again. | — |
+| `hermes.memory.hindsight.tenant` | string | Tenant the banks belong to. | `default` |
+| `hermes.memory.hindsight.workerId` | string | Stable worker identity. Without it the worker adopts the container host name and an operation in flight stays parked under an identifier nobody claims again. | `${guests.memory.hostName}-w1` |
 | `hermes.memory.hindsight.bankTemplate` | string | Template deriving a bank from a profile. **This is the tenancy boundary**: the backend key has no per-bank scope, so a mistake here collapses several users onto one bank with no visible error. | `hermes-{profile}` |
-| `hermes.memory.hindsight.recallBudget` | `low` \| `mid` \| `high` | Retrieval effort spent before each turn. | — |
-| `hermes.memory.hindsight.recallMaxTokens` | integer | Upper bound on the injected context. | — |
+| `hermes.memory.hindsight.recallBudget` | `low` \| `mid` \| `high` | Retrieval effort spent before each turn. | `mid` |
+| `hermes.memory.hindsight.recallMaxTokens` | integer | Upper bound on the injected context. | `4096` |
 | `hermes.memory.hindsight.retainEveryNTurns` | integer | Turn interval between retention operations. | `1` |
-| `hermes.memory.hindsight.retainMaxConcurrent` | integer | Concurrent extraction operations. | — |
-| `hermes.memory.hindsight.llmMaxConcurrent` | integer | Concurrent inference calls issued by the backend. | — |
+| `hermes.memory.hindsight.retainMaxConcurrent` | integer | Concurrent extraction operations. | `2` |
+| `hermes.memory.hindsight.llmMaxConcurrent` | integer | Concurrent inference calls issued by the backend. | `8` |
 | `hermes.memory.hindsight.llmRetries` | integer | Retries on a failed extraction call. | `3` |
 | `hermes.memory.hindsight.llmTimeout` | integer | Timeout of an extraction call, in seconds. | `120` |
-| `hermes.memory.hindsight.textLanguage` | string | Dictionary used by the full-text channel. | — |
+| `hermes.memory.hindsight.textLanguage` | string | Dictionary used by the full-text channel. It must match the language of the corpus, and it is validated together with the embedding model. | `italian` |
 | `hermes.memory.hindsight.strictSchema` | boolean | Reject facts that do not match the declared schema. | `false` |
-| `hermes.memory.hindsight.reranker` | string | Fusion strategy over the four channels. The rank-based strategy is algorithmic and keeps a CPU-bound model off the recall path. | `rrf` |
+| `hermes.memory.hindsight.reranker` | string | Fusion strategy over the four channels. The rank-based strategy is algorithmic and keeps a CPU-bound model off the retrieval path. | `rrf` |
 | `hermes.memory.hindsight.memoryMode` | `off` \| `hybrid` | Memory mode of the interactive profiles. | `hybrid` |
 | `hermes.memory.embedding.provider` | `local` \| `remote` | Where embeddings are computed. Local keeps content inside the perimeter. | `local` |
-| `hermes.memory.embedding.model` | string | Embedding model. **Irreversible after the first retention.** Validate against the language of the corpus first. | — |
-| `hermes.memory.embedding.dimensions` | integer | Vector dimensionality. Irreversible together with the model. | — |
-| `hermes.memory.embedding.candidates` | list of string | Models compared during the validation that precedes the freeze. | `[ ]` |
-| `hermes.memory.retention.session` | duration | Retention of the session level. | — |
-| `hermes.memory.retention.semantic` | duration | Retention of the semantic level. | — |
+| `hermes.memory.embedding.model` | string | Embedding model. The default is the proposed candidate and is **pending validation**: the choice is irreversible after the first retention, because changing it later is a migration with a full re-embedding. | `intfloat/multilingual-e5-small` |
+| `hermes.memory.embedding.dimensions` | integer | Vector dimensionality. Irreversible together with the model. | `384` |
+| `hermes.memory.embedding.candidates` | list of string | Models compared during the validation that precedes the freeze. The last is the design baseline and is trained predominantly on English text, which is why the comparison exists. | `[ "intfloat/multilingual-e5-small", "BAAI/bge-m3", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2", "BAAI/bge-small-en-v1.5" ]` |
+| `hermes.memory.retention.session` | duration | Retention of the session level. | `30d` |
+| `hermes.memory.retention.semantic` | duration | Retention of the semantic level. | `365d` |
 | `hermes.memory.tlsInternal` | boolean | Require TLS on the application-to-data path. | `true` |
 
 ### Agent runtime
 
 | Variable | Type | Description | Default |
 | --- | --- | --- | --- |
-| `hermes.agent.sourceRevision` | string | Pinned revision of the runtime fork this project versions. Never a moving reference. | — |
-| `hermes.agent.uid` | integer | System user of the runtime, matched by the outbound rules. | — |
-| `hermes.agent.statePath` | path | Persistent volume of the interactive plane. | — |
-| `hermes.agent.servicePath` | path | Persistent volume of the programmatic plane. | — |
-| `hermes.agent.api.bindAddress` | IPv4 | Address the API server binds to. Never the wildcard address: the proxy is the only admitted path. | — |
+| `hermes.agent.sourceRevision` | string | Pinned revision of the runtime fork this project versions. Never a moving reference. | `470cf66b` |
+| `hermes.agent.uid` | integer | System user of the runtime, matched by the outbound rules. | `991` |
+| `hermes.agent.statePath` | path | Persistent volume of the interactive plane. | `/var/lib/hermes` |
+| `hermes.agent.servicePath` | path | Persistent volume of the programmatic plane. | `/var/lib/hermes-svc` |
+| `hermes.agent.api.bindAddress` | IPv4 | Address the API server binds to. Never the wildcard address: the proxy is the only admitted path. | `127.0.0.1` |
 | `hermes.agent.api.port` | port | Port of the API server. | `8000` |
-| `hermes.agent.api.profilePrefix` | string | Path prefix under which a profile is served, resolved at the ingress and never taken from the request body. | — |
-| `hermes.agent.api.maxConcurrent` | integer | Concurrent runs admitted on the interactive plane. | — |
-| `hermes.agent.profilePrefixUser` | string | Prefix of user profile names. | — |
+| `hermes.agent.api.profilePrefix` | string | Path prefix under which a profile is served, resolved at the ingress and never taken from the request body. | `/p` |
+| `hermes.agent.api.maxConcurrent` | integer | Concurrent runs admitted on the interactive plane. | `4` |
+| `hermes.agent.profilePrefixUser` | string | Prefix of user profile names. | `usr` |
 | `hermes.agent.profilePrefixService` | string | Prefix of service profile names. | `svc` |
 | `hermes.agent.maxSpawnDepth` | integer, 0–2 | Delegation levels below the root agent, counted as spawn levels rather than tree nodes. | `2` |
-| `hermes.agent.maxConcurrentChildren` | integer | Subordinates a single agent may run at once. | — |
-| `hermes.agent.maxIterations` | integer | Iteration cap of an interactive run. | — |
-| `hermes.agent.skillsTapRepository` | string or null | Additional skill registry. Null limits the catalogue to the sources built into the runtime. | `null` |
+| `hermes.agent.maxConcurrentChildren` | integer | Subordinates a single agent may run at once. | `3` |
+| `hermes.agent.maxIterations` | integer | Iteration cap of an interactive run. | `25` |
+| `hermes.agent.skillsTapRepository` | string or null | Additional skill registry. The proposed value is an absence, not a missing address: the catalogue is the one this repository carries. | `null` |
 | `hermes.agent.timeouts.inference` | duration | Upper bound on a call from the agent to the broker. | `300s` |
 | `hermes.agent.timeouts.recall` | duration | Upper bound on a retrieval. Exceeding it degrades the turn rather than failing it. | `2s` |
 | `hermes.agent.retries.broker` | integer | Retries on a failed broker call. | `2` |
@@ -856,23 +892,23 @@ Declared per role under `hermes.guests.<role>`, where `<role>` is one of
 
 | Variable | Type | Description | Default |
 | --- | --- | --- | --- |
-| `hermes.models.main` | model slug | Model driving the agentic loop. | — |
+| `hermes.models.main` | model slug | Model driving the agentic loop. | `anthropic/claude-sonnet-5` |
 | `hermes.models.deliberation` | model slug | Multi-model deliberation alias. Selectivity is left to the gateway's own gate; no custom routing layer is introduced. | `openrouter/fusion` |
-| `hermes.models.delegation` | model slug | Model used by the delegation slot. | — |
-| `hermes.models.auxiliaryDefault` | model slug | Model backing the auxiliary slots: compression, titles, query rewriting. | — |
-| `hermes.models.memoryRetain` | model slug | Model extracting facts during retention. | — |
-| `hermes.models.memoryReflect` | model slug | Model performing cross-memory synthesis. | — |
-| `hermes.models.memoryConsolidation` | model slug | Model consolidating facts into observations. | — |
-| `hermes.models.evaluation` | model slug | Model backing the evaluators. | — |
-| `hermes.models.temperatureMain` | float, 0–2 | Sampling temperature of the main slot. | — |
-| `hermes.models.reasoning.main` | boolean | Reasoning on the main slot. Its tokens are billed as output and count towards the cost target. | — |
+| `hermes.models.delegation` | model slug | Model used by the delegation slot. | `anthropic/claude-haiku-4.5` |
+| `hermes.models.auxiliaryDefault` | model slug | Model backing the auxiliary slots: compression, titles, query rewriting. | `anthropic/claude-haiku-4.5` |
+| `hermes.models.memoryRetain` | model slug | Model extracting facts during retention. Structured output must be reliable. | `anthropic/claude-haiku-4.5` |
+| `hermes.models.memoryReflect` | model slug | Model performing cross-memory synthesis. | `anthropic/claude-haiku-4.5` |
+| `hermes.models.memoryConsolidation` | model slug | Model consolidating facts into observations. | `anthropic/claude-haiku-4.5` |
+| `hermes.models.evaluation` | model slug | Model backing the evaluators. | `anthropic/claude-sonnet-5` |
+| `hermes.models.temperatureMain` | float, 0–2 | Sampling temperature of the main slot. | `0.2` |
+| `hermes.models.reasoning.main` | boolean | Reasoning on the main slot. Its tokens are billed as output and count towards the cost target, which is why the setting is explicit rather than left to the model default. | `true` |
 | `hermes.models.reasoning.mainEffort` | `low` … `max` | Reasoning effort of the main slot. | `low` |
 | `hermes.models.reasoning.delegation` | boolean | Reasoning on the delegation slot. | `false` |
 | `hermes.models.reasoning.auxiliary` | boolean | Reasoning on the auxiliary slots. | `false` |
 | `hermes.models.reasoning.memory` | boolean | Reasoning on the memory extraction slots. | `false` |
 | `hermes.models.gateway.zeroDataRetention` | boolean | Request the gateway's zero-retention mode. | `true` |
-| `hermes.models.gateway.referer` | string | Calling application address reported to the gateway. | — |
-| `hermes.models.gateway.appTitle` | string | Calling application name reported to the gateway. | — |
+| `hermes.models.gateway.referer` | string | Calling application address reported to the gateway. | `https://${ingress.publicFqdn}` |
+| `hermes.models.gateway.appTitle` | string | Calling application name reported to the gateway. | `HERMES-AGENT` |
 | `hermes.models.gateway.timeout` | duration | Upper bound on a gateway call. | `600s` |
 | `hermes.models.gateway.retries` | integer | Retries on a failed gateway call. | `3` |
 
@@ -880,34 +916,34 @@ Declared per role under `hermes.guests.<role>`, where `<role>` is one of
 
 | Variable | Type | Description | Default |
 | --- | --- | --- | --- |
-| `hermes.identity.users` | list of `{ identity, profile }` | Explicit identity-to-profile map. An enumeration, never a transformation: an enumeration fails visibly on an unknown identity, while a normalisation can collapse two identities onto one profile — and one memory bank — silently. | `[ ]` |
-| `hermes.identity.operators` | list of string | Identities allowed to reach the operator consoles. | `[ ]` |
-| `hermes.identity.groups.users` | string | Group granting access to the chat interface. | — |
-| `hermes.identity.groups.operators` | string | Group granting access to the operator consoles. | — |
+| `hermes.identity.users` | list of `{ identity, profile }` | Explicit identity-to-profile map. An enumeration, never a transformation: an enumeration fails visibly on an unknown identity, while a normalisation can collapse two identities onto one profile — and one memory bank — silently. Two sample users are the proposed population. | `[ { identity = "utente.a@proxlab"; profile = "usr-alice"; }, { identity = "utente.b@proxlab"; profile = "usr-bruno"; } ]` |
+| `hermes.identity.operators` | list of string | Identities allowed to reach the operator consoles. | `[ "operator@proxlab" ]` |
+| `hermes.identity.groups.users` | string | Group granting access to the chat interface. | `hermes-users` |
+| `hermes.identity.groups.operators` | string | Group granting access to the operator consoles. | `hermes-operators` |
 | `hermes.identity.port` | port | Port of the identity provider, bound to loopback. | `9091` |
 | `hermes.identity.metricsPort` | port | Port exposing the identity provider metrics. | `9959` |
 | `hermes.identity.subjectClaim` | `email` \| `username` | Claim carrying the identity used for profile resolution. | `email` |
-| `hermes.identity.session.expiration` | duration | Absolute lifetime of a session. | — |
-| `hermes.identity.session.inactivity` | duration | Idle time after which a session closes. | — |
+| `hermes.identity.session.expiration` | duration | Absolute lifetime of a session. | `12h` |
+| `hermes.identity.session.inactivity` | duration | Idle time after which a session closes. | `1h` |
 | `hermes.identity.session.rememberMe` | duration | Lifetime of a persistent session. Zero disables it. | `0` |
 | `hermes.identity.regulation.maxRetries` | integer | Failed attempts before a ban. | `3` |
 | `hermes.identity.regulation.findTime` | duration | Window over which failures are counted. | `2m` |
 | `hermes.identity.regulation.banTime` | duration | Duration of the ban. | `15m` |
 | `hermes.identity.logLevel` | enum | Log level of the identity provider. | `info` |
-| `hermes.identity.usersFile` | path | File backend holding the user population. A directory backend is the expected choice in service, and substituting it does not touch the access rules. | — |
+| `hermes.identity.usersFile` | path | File backend holding the user population. The default is the template in this repository, which carries placeholders rather than hashes and is therefore rejected by the placeholder check until replaced. | `../config/authelia/users.example.yml` |
 
 ### Ingress
 
 | Variable | Type | Description | Default |
 | --- | --- | --- | --- |
-| `hermes.ingress.publicFqdn` | string | Name under which the chat interface is published. | — |
-| `hermes.ingress.controlPlaneFqdn` | string | Name under which the memory inspection console is published. | — |
-| `hermes.ingress.cookieDomain` | string | Parent domain the session cookie is issued for. | — |
-| `hermes.ingress.tls.source` | `acme` \| `internal-ca` \| `manual` | Origin of the certificate material. | — |
-| `hermes.ingress.tls.certificate` | path | Path of the certificate chain. | — |
-| `hermes.ingress.tls.key` | path | Path of the private key. | — |
+| `hermes.ingress.publicFqdn` | string | Name under which the chat interface is published. | `hermes.proxlab` |
+| `hermes.ingress.controlPlaneFqdn` | string | Name under which the memory inspection console is published. | `memory.proxlab` |
+| `hermes.ingress.cookieDomain` | string | Parent domain the session cookie is issued for. | `proxlab` |
+| `hermes.ingress.tls.source` | `acme` \| `internal-ca` \| `manual` | Origin of the certificate material. | `internal-ca` |
+| `hermes.ingress.tls.certificate` | path | Path of the certificate chain. | `/etc/ssl/hermes/fullchain.pem` |
+| `hermes.ingress.tls.key` | path | Path of the private key. | `/etc/ssl/hermes/privkey.pem` |
 | `hermes.ingress.tls.minimumVersion` | `TLSv1.2` \| `TLSv1.3` | Lowest protocol version accepted. | `TLSv1.3` |
-| `hermes.ingress.corsAllowedOrigins` | string | Explicit origin allow-list. An assertion rejects a wildcard: a wildcard is not an allow-list. | — |
+| `hermes.ingress.corsAllowedOrigins` | string | Explicit origin allow-list. An assertion rejects a wildcard: a wildcard is not an allow-list. | `https://${ingress.publicFqdn}` |
 | `hermes.ingress.rateLimit.auth` | string | Request rate admitted on the authentication routes. | `10r/m` |
 | `hermes.ingress.rateLimit.burst` | integer | Burst tolerated above that rate. | `5` |
 | `hermes.ingress.timeouts.clientConnect` | duration | Upper bound on establishing a client connection. | `10s` |
@@ -916,25 +952,28 @@ Declared per role under `hermes.guests.<role>`, where `<role>` is one of
 | `hermes.ingress.timeouts.proxyRead` | duration | Upper bound on an upstream read. | `600s` |
 | `hermes.ingress.webui.image` | image reference | Digest-pinned image of the chat interface. | — |
 | `hermes.ingress.webui.port` | port | Loopback port of the chat interface. It is never published. | `8080` |
-| `hermes.ingress.webui.dataPath` | path | Persistent volume of the chat interface. | — |
-| `hermes.ingress.identityMapPath` | path | File holding the identity-to-profile map consumed by the proxy, generated from the same declaration that provisions the profiles. | `/etc/hermes/identity-map.conf` |
+| `hermes.ingress.webui.dataPath` | path | Persistent volume of the chat interface. | `/var/lib/open-webui` |
+| `hermes.ingress.identityMapPath` | path | File holding the identity-to-profile map consumed by the proxy, generated from the same declaration that provisions the profiles. | `/etc/nginx/identity-map.conf` |
 
 ### Programmatic plane
 
-Workloads are declared under `hermes.programmatic.workloads.<name>`.
+The inventory is empty by default: a workload is a job somebody asked for, not
+a value to propose. Every *parameter* of a workload does carry its proposed
+default, so `programmatic.workloads.<name> = { };` is a complete declaration.
 
 | Variable | Type | Description | Default |
 | --- | --- | --- | --- |
-| `schedule` | string | Calendar expression triggering the workload. | — |
-| `jitter` | duration | Randomised delay applied to the trigger. | `5m` |
-| `timeout` | duration | Upper bound on a single run. | — |
-| `outputPath` | path | Directory the produced artefact is written to. | — |
-| `toolsets` | list of string | Toolsets granted, **declared by inclusion**. A list of exclusions only protects against the capabilities somebody thought of excluding. | — |
-| `maxIterations` | integer | Iteration cap. In an unattended job this is a spending cap before it is a correctness cap. | — |
-| `memoryMode` | `off` \| `hybrid` | Persistent memory. Enabled only when state must survive between runs, and then on a service bank disjoint from every user bank. | `off` |
+| `hermes.programmatic.workloads` | attribute set | Unattended workloads, keyed by name. | `{ }` |
+| `<workload>.schedule` | string | Calendar expression triggering the workload. | `*-*-* 02:00:00` |
+| `<workload>.jitter` | duration | Randomised delay applied to the trigger. | `5m` |
+| `<workload>.timeout` | duration | Upper bound on a single run. | `30m` |
+| `<workload>.outputPath` | path | Directory the produced artefact is written to. | `${agent.servicePath}/out` |
+| `<workload>.toolsets` | list of string | Toolsets granted, **declared by inclusion**. A list of exclusions only protects against the capabilities somebody thought of excluding. | `[ "execute_code", "file_read", "file_write" ]` |
+| `<workload>.maxIterations` | integer | Iteration cap. In an unattended job this is a spending cap before it is a correctness cap. | `15` |
+| `<workload>.memoryMode` | `off` \| `hybrid` | Persistent memory. Enabled only when state must survive between runs, and then on a service bank disjoint from every user bank. | `off` |
 | `hermes.programmatic.maxConcurrentWorkloads` | integer | Workloads admitted to run at the same time. | `1` |
 | `hermes.programmatic.cpuWeight` | integer | Relative CPU weight of the batch slice. | `50` |
-| `hermes.programmatic.memoryHigh` | string | Soft memory ceiling of the batch slice. | — |
+| `hermes.programmatic.memoryHigh` | string | Soft memory ceiling of the batch slice. | `1G` |
 
 ### Observability
 
@@ -946,78 +985,84 @@ Workloads are declared under `hermes.programmatic.workloads.<name>`.
 | `hermes.observability.metricsPort` | port | Port of the metrics backend. | `9090` |
 | `hermes.observability.logsPort` | port | Port of the log backend. | `3100` |
 | `hermes.observability.dashboardPort` | port | Port of the dashboard interface. | `3000` |
-| `hermes.observability.address` | IPv4 | Address telemetry is sent to. A parameter of its own so that consolidating the role does not rewrite every producer. | — |
-| `hermes.observability.dataPath` | path | Mount point of the volume holding observability state. | — |
+| `hermes.observability.address` | IPv4 | Address telemetry is sent to. Derived from the guest inventory so that consolidating or separating the role does not rewrite every producer. | `${guests.observability.address}` |
+| `hermes.observability.dataPath` | path | Mount point of the volume holding observability state. | `/var/lib/observability` |
 | `hermes.observability.scrapeInterval` | duration | Interval between metric collections. | `15s` |
 | `hermes.observability.logLevel` | enum | Log level of the platform services. A debug level left on is the most frequent cause of content reaching a shared backend, and the least visible. | `info` |
-| `hermes.observability.retention.observability` | integer | Retention of metrics and logs, in days. | — |
-| `hermes.observability.retention.audit` | duration | Retention of the audit trail. Always longer than the observability retention. | — |
-| `hermes.observability.retention.trajectory` | duration | Retention of the trajectory files. | — |
-| `hermes.observability.instrumentation.revision` | string | Pinned revision of the instrumentation. It must expose the declared trace semantics: a revision predating them passes the deployment phase and invalidates the cost measurement. | — |
-| `hermes.observability.instrumentation.eventsPath` | path | Directory holding the event stream. Metrics and identifiers only. | — |
-| `hermes.observability.instrumentation.trajectoryPath` | path | Directory holding the trajectory files. Contains content: restricted permissions, no shared-backend exporter. | — |
+| `hermes.observability.retention.observability` | integer | Retention of metrics and logs, in days. | `7` |
+| `hermes.observability.retention.audit` | duration | Retention of the audit trail. Always longer than the observability retention. | `90d` |
+| `hermes.observability.retention.trajectory` | duration | Retention of the trajectory files. | `14d` |
+| `hermes.observability.instrumentation.revision` | string | Pinned revision of the instrumentation. The default is a **verifiable starting pin, not a confirmed one**: the revision in use must expose the declared trace semantics, and one predating them passes the deployment phase while dropping the delegation attributes. | `0.3` |
+| `hermes.observability.instrumentation.eventsPath` | path | Directory holding the event stream. Metrics and identifiers only. | `/var/log/hermes/atof` |
+| `hermes.observability.instrumentation.trajectoryPath` | path | Directory holding the trajectory files. Contains content: restricted permissions, no shared-backend exporter. | `${agent.statePath}/atif` |
 | `hermes.observability.instrumentation.traceSemantics` | string | Trace semantics declared by the instrumentation and expected by the trace backend. | `openinference` |
 | `hermes.observability.instrumentation.hideInputs` | boolean | Suppress prompt attributes. Suppressing them removes the evaluators' input. | `false` |
 | `hermes.observability.instrumentation.hideOutputs` | boolean | Suppress completion attributes. | `false` |
-| `hermes.observability.evaluation.bindAddress` | IPv4 | Address the evaluation platform binds to. Neither the wildcard address nor loopback: it is reached through the proxy. | — |
+| `hermes.observability.evaluation.bindAddress` | IPv4 | Address the evaluation platform binds to. Neither the wildcard address nor loopback: it is reached through the proxy. | `${guests.observability.address}` |
 | `hermes.observability.evaluation.port` | port | Port serving the evaluation console and telemetry over HTTP. | `6006` |
-| `hermes.observability.evaluation.grpcPort` | port | Port receiving telemetry over gRPC. Deliberately not the conventional one — an assertion rejects a collision with the collector. | — |
-| `hermes.observability.evaluation.fqdn` | string | Name under which the evaluation console is published. | — |
-| `hermes.observability.evaluation.workingDirectory` | path | State directory. Restricted permissions, because of what it holds. | — |
-| `hermes.observability.evaluation.databaseUrl` | string | Connection string of the evaluation platform store. | — |
-| `hermes.observability.evaluation.projectName` | string | Project the traces are filed under. | — |
-| `hermes.observability.evaluation.retentionDays` | integer | Retention of the evaluation platform. Aligned with the trajectory retention, not the observability one: it is an artefact that contains content. | — |
+| `hermes.observability.evaluation.grpcPort` | port | Port receiving telemetry over gRPC. Deliberately not the conventional one — an assertion rejects a collision with the collector. | `4417` |
+| `hermes.observability.evaluation.fqdn` | string | Name under which the evaluation console is published. | `phoenix.${ingress.cookieDomain}` |
+| `hermes.observability.evaluation.workingDirectory` | path | State directory. Restricted permissions, because of what it holds. | `${observability.dataPath}/phoenix` |
+| `hermes.observability.evaluation.databaseUrl` | string | Connection string of the evaluation platform store. An embedded engine is the proposed choice: a server engine is excluded by the memory available on the consolidated guest. The consequence falls on the backup, which must copy an open database through the engine's own mechanism. | `sqlite:///${evaluation.workingDirectory}/phoenix.db` |
+| `hermes.observability.evaluation.projectName` | string | Project the traces are filed under. The plane is carried as a span attribute, not as a separate project. | `hermes` |
+| `hermes.observability.evaluation.retentionDays` | integer | Retention of the evaluation platform. Aligned with the trajectory retention, not the observability one: it is an artefact that contains content. | `14` |
 | `hermes.observability.evaluation.enableNativeAuth` | boolean | Use the platform's own authentication. Disabled: there is one identity provider. | `false` |
-| `hermes.observability.evaluation.memoryHigh` | string | Soft memory ceiling. It does not add memory; it decides which process is reclaimed first. | — |
-| `hermes.observability.evaluation.memoryMax` | string | Hard memory ceiling. | — |
-| `hermes.observability.evaluation.secretStoreMemoryMin` | string | Memory floor guaranteed to the secret store on a consolidated guest. Losing the vault costs more than losing observability. | — |
-| `hermes.observability.evaluation.dataset` | string | Name of the versioned evaluation dataset. | — |
-| `hermes.observability.evaluation.evaluators` | list of string | Evaluators executed by an experiment. | — |
+| `hermes.observability.evaluation.memoryHigh` | string | Soft memory ceiling. It does not add memory; it decides which process is reclaimed first. | `448M` |
+| `hermes.observability.evaluation.memoryMax` | string | Hard memory ceiling. | `512M` |
+| `hermes.observability.evaluation.secretStoreMemoryMin` | string | Memory floor guaranteed to the secret store on a consolidated guest. Losing the vault costs more than losing observability. | `192M` |
+| `hermes.observability.evaluation.dataset` | string | Name of the versioned evaluation dataset. | `obj03-recall` |
+| `hermes.observability.evaluation.evaluators` | list of string | Evaluators executed by an experiment. | `[ "relevance", "faithfulness" ]` |
 | `hermes.observability.evaluation.temperature` | float | Sampling temperature of the evaluators. Zero is required: a non-deterministic evaluation does not detect drift, it imitates it. | `0.0` |
-| `hermes.observability.evaluation.concurrency` | integer | Concurrent evaluator calls, bounded by the capacity the interactive plane does not reserve. | — |
+| `hermes.observability.evaluation.concurrency` | integer | Concurrent evaluator calls. Two is the value for a window with interactive traffic present; a dedicated window tolerates more, bounded by the capacity the interactive plane does not reserve. | `2` |
 | `hermes.observability.alerts.window` | duration | Evaluation window of the platform rules. | `5m` |
 | `hermes.observability.alerts.memoryWindow` | duration | Evaluation window of the memory rules, longer because the signal is slower. | `15m` |
-| `hermes.observability.alerts.latencyP95` | duration | Interactive latency at the ninety-fifth percentile above which an alert is raised. | — |
-| `hermes.observability.alerts.recallP95` | duration | Retrieval latency at the ninety-fifth percentile above which an alert is raised. | — |
-| `hermes.observability.alerts.recallCoverageMin` | float, 0–1 | Lowest admitted share of turns served with memory context. Retrieval degradation is silent by construction; this rule is where it becomes visible. | — |
-| `hermes.observability.alerts.retainQueue` | integer | Extraction queue depth above which an alert is raised. | — |
-| `hermes.observability.alerts.costDaily` | float | Daily spend, across attributable channels, above which an alert is raised. | — |
-| `hermes.observability.alerts.errorRate` | float | Errors per minute above which an alert is raised. | — |
-| `hermes.observability.alerts.workloadDuration` | duration | Unattended run duration above which an alert is raised. | — |
-| `hermes.observability.alerts.workloadFailures` | float | Failed unattended runs over the window above which an alert is raised. | — |
+| `hermes.observability.alerts.latencyP95` | duration | Interactive latency at the ninety-fifth percentile above which an alert is raised. | `12s` |
+| `hermes.observability.alerts.recallP95` | duration | Retrieval latency at the ninety-fifth percentile above which an alert is raised. | `2s` |
+| `hermes.observability.alerts.recallCoverageMin` | float, 0–1 | Lowest admitted share of turns served with memory context. Retrieval degradation is silent by construction; this rule is where it becomes visible. | `0.90` |
+| `hermes.observability.alerts.retainQueue` | integer | Extraction queue depth above which an alert is raised. | `50` |
+| `hermes.observability.alerts.costDaily` | float | Daily spend, across attributable channels, above which an alert is raised. | `15.0` |
+| `hermes.observability.alerts.errorRate` | float | Errors per minute above which an alert is raised. | `1.0` |
+| `hermes.observability.alerts.workloadDuration` | duration | Unattended run duration above which an alert is raised. | `45m` |
+| `hermes.observability.alerts.workloadFailures` | float | Failed unattended runs over the window above which an alert is raised. | `2.0` |
 | `hermes.observability.alerts.deliberationRatioMax` | float, 0–1 | Share of turns triggering deliberation above which an alert is raised. | `0.10` |
 
 ### Backup
 
 | Variable | Type | Description | Default |
 | --- | --- | --- | --- |
-| `hermes.backup.stagingPath` | path | Path local to the guest owning the data, where copies are written before collection. No data-zone guest mounts the backup storage: that would open a flow the segmentation does not have. | — |
-| `hermes.backup.ageRecipient` | string | Public key encrypting the copies at rest. Distinct from the key protecting the bootstrap credential, and held outside the node. | — |
-| `hermes.backup.encryption` | `none` \| `at-rest` \| `in-transit` \| `both` | Protection applied to the copies. | `at-rest` |
-| `hermes.backup.schedules` | attribute set of string | Calendar expressions of the backup jobs, keyed by artefact. | `{ }` |
-| `hermes.backup.restoreTestFrequency` | duration | Interval between restore exercises. An unverified backup is not a backup. | — |
-| `hermes.backup.nfs.server` | string or null | Appliance exporting the backup storage. | `null` |
+| `hermes.backup.stagingPath` | path | Path local to the guest owning the data, where copies are written before collection. No data-zone guest mounts the backup storage: that would open a flow the segmentation does not have. | `/var/backups/hermes` |
+| `hermes.backup.ageRecipient` | string | Public key encrypting the copies at rest. A security decision, not a proposal. Distinct from the key protecting the bootstrap credential, and held outside the node. | — |
+| `hermes.backup.encryption` | `none` \| `at-rest` \| `in-transit` \| `both` | Protection applied to the copies. At rest covers the logical dumps; guest-level images are not covered, and that gap is accepted knowingly. | `at-rest` |
+| `hermes.backup.schedules.memory` | string | Schedule of the knowledge store dump. | `0 1 * * *` |
+| `hermes.backup.schedules.sessions` | string | Schedule of the session store dump. | `15 1 * * *` |
+| `hermes.backup.schedules.secretStore` | string | Schedule of the secret store snapshot. | `30 1 * * *` |
+| `hermes.backup.schedules.identity` | string | Schedule of the identity provider backup. | `45 1 * * *` |
+| `hermes.backup.schedules.evaluation` | string | Schedule of the evaluation platform backup. | `0 3 * * *` |
+| `hermes.backup.schedules.guests` | string | Schedule of the guest-level images. | `0 3 * * 0` |
+| `hermes.backup.restoreTestFrequency` | duration | Interval between restore exercises. An unverified backup is not a backup. | `30d` |
+| `hermes.backup.nfs.server` | string or null | Appliance exporting the backup storage. The matrix gives the expected range, not an address: it is read from the node's storage configuration. If it falls outside the management range, the backup path crosses a routed zone and the choice of target must be re-examined. | `null` |
 | `hermes.backup.nfs.exportPath` | string or null | Exported path mounted by the node. | `null` |
-| `hermes.backup.nfs.mountOptions` | list of string | Mount options. A soft mount turns a network timeout into a truncated backup that exits successfully, discovered only at restore time. | `[ ]` |
+| `hermes.backup.nfs.mountOptions` | list of string | Mount options. The hard mount is the only non-negotiable entry: a soft mount turns a network timeout into a truncated backup that exits successfully. The parallel connection count requires a recent protocol version and must be removed if the server negotiates an older one. | `[ "vers=4.2", "hard", "timeo=600", "retrans=2", "noatime", "nconnect=4" ]` |
 
 ### Objectives and thresholds
 
 | Variable | Type | Description | Default |
 | --- | --- | --- | --- |
-| `hermes.objectives.latencyP95` | duration | Target interactive latency at the ninety-fifth percentile. | — |
-| `hermes.objectives.latencyDeliberationP95` | duration | Target latency for a turn that deliberates. | — |
-| `hermes.objectives.turnsPerMinute` | integer | Throughput the platform is expected to sustain. | — |
-| `hermes.objectives.degradeMax` | float, 0–1 | Highest admitted degradation under load before the ceiling is considered reached. | — |
-| `hermes.objectives.soakDuration` | duration | Duration of the endurance run. | — |
-| `hermes.objectives.bankSize` | integer | Size of the memory bank used by the representative sample. | — |
-| `hermes.objectives.sampleWindow` | duration | Window over which the acceptance measurements are read. | — |
-| `hermes.objectives.crossPlaneDelta` | float, 0–1 | Highest admitted increase of interactive latency while the programmatic plane is under load. The four structural checks can all pass while this one fails. | — |
-| `hermes.objectives.recoveryPointObjective` | duration | Highest admitted data loss after a recovery. | — |
-| `hermes.objectives.recoveryTimeObjective` | duration | Highest admitted time to restore the service. | — |
-| `hermes.objectives.meanTimeToRecovery` | duration | Target repair time for a platform component. | — |
-| `hermes.objectives.meanTimeToRecoveryEvaluation` | duration | Target repair time for the evaluation platform, off the hot path and therefore longer. | — |
-| `hermes.objectives.rotationPeriod` | duration | Default rotation period of the operational secrets. | — |
-
+| `hermes.objectives.latencyP95` | duration | Target interactive latency at the ninety-fifth percentile. | `8s` |
+| `hermes.objectives.latencyDeliberationP95` | duration | Target latency for a turn that deliberates. | `40s` |
+| `hermes.objectives.turnsPerMinute` | integer | Throughput the platform is expected to sustain. | `10` |
+| `hermes.objectives.degradeMax` | float, 0–1 | Highest admitted degradation under load before the ceiling is considered reached. | `0.30` |
+| `hermes.objectives.soakDuration` | duration | Duration of the endurance run. | `4h` |
+| `hermes.objectives.bankSize` | integer | Size of the memory bank used by the representative sample. | `5000` |
+| `hermes.objectives.sampleWindow` | duration | Window over which the acceptance measurements are read. | `24h` |
+| `hermes.objectives.crossPlaneDelta` | float, 0–1 | Highest admitted increase of interactive latency while the programmatic plane is under load. **A proposal awaiting ratification.** The four structural checks can all pass while this one fails. | `0.10` |
+| `hermes.objectives.recoveryPointObjective` | duration | Highest admitted data loss after a recovery. A proposal awaiting ratification. | `24h` |
+| `hermes.objectives.recoveryTimeObjective` | duration | Highest admitted time to restore the service. A proposal awaiting ratification. | `4h` |
+| `hermes.objectives.meanTimeToRecovery` | duration | Target repair time for a platform component. | `4h` |
+| `hermes.objectives.meanTimeToRecoveryEvaluation` | duration | Target repair time for the evaluation platform. Twice the general figure because it sits off the hot path; its ceiling is the acceptance sample window. | `8h` |
+| `hermes.objectives.rotationPeriod` | duration | Default rotation period of the operational secrets. | `90d` |
+| `hermes.objectives.maxSessionsPerGuest` | integer or null | Concurrent interactive sessions the agentic guest sustains before saturation. **Measured, never estimated** — a low measured ceiling is information, a high estimated one is not. Null means the measurement has not been taken. | `null` |
+| `hermes.objectives.memoryFootprintPerInstance` | integer or null | Steady-state memory footprint of one agent instance, in mebibytes. Measured alongside the ceiling above. | `null` |
 ---
 
 ## Runtime variables

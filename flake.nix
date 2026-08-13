@@ -62,13 +62,14 @@
       # ----------------------------------------------------------------------
       # Site parameters
       #
-      # Every value that describes a specific installation lives in a single
-      # file. The repository ships an unfilled template only: an operator
-      # copies it to parameters.nix, fills it in, and versions it alongside
-      # the flake, so the flake remains the single point of truth required by
-      # HLD DD-06. Evaluation stops with an explicit message until that file
-      # exists, which is the earliest and cheapest place for the failure to
-      # occur.
+      # Every option carries the proposed value of the deployment variable
+      # matrix as its default, so parameters.nix holds only what this
+      # installation changes — plus the handful of values the matrix does not
+      # propose, and the acknowledgement that the rest were checked.
+      #
+      # The file is still required. A configuration that builds from defaults
+      # alone would describe the reference installation rather than this one,
+      # and it would do so without anybody having said so.
       # ----------------------------------------------------------------------
       parametersPath = ./parameters.nix;
 
@@ -78,28 +79,17 @@
         else throw ''
           parameters.nix is missing.
 
-          Copy the template and fill in the values of the deployment variable
-          matrix before evaluating this flake:
+          Copy the template and review it against the node before evaluating
+          this flake:
 
               cp parameters.example.nix parameters.nix
               $EDITOR parameters.nix
 
-          Every parameter is documented in README.md. Parameters that describe
-          the site — addresses, storage identifiers, VMIDs, public keys — have
-          no default on purpose: an unset one is reported by name instead of
-          being silently replaced by a value that happens to evaluate.
+          Every option already defaults to the proposed value of the variable
+          matrix, so the file is short by design: it carries the values the
+          matrix does not propose, whatever this site changes, and the review
+          acknowledgement. All of them are documented in README.md.
         '';
-
-      guests = parameters.hermes.guests or
-        (throw "parameters.nix does not define hermes.guests.");
-
-      # A guest whose aliasOf is set has no configuration of its own: its
-      # components are hosted by the guest it points at. The alias keeps the
-      # role addressable in the configuration files that already reference it,
-      # without creating a virtual machine that does not exist.
-      activeRoles = lib.filter
-        (role: (guests.${role}.aliasOf or null) == null)
-        (builtins.attrNames guests);
 
       # ----------------------------------------------------------------------
       # Python environments
@@ -137,19 +127,27 @@
         inherit system;
         specialArgs = { inherit egressBroker hermesEnv hermes-src; };
         modules = commonModules ++ [
-          {
-            hermes.role = role;
-            networking.hostName = guests.${role}.hostName;
-          }
+          { hermes.role = role; }
           (./hosts + "/${role}.nix")
         ];
       };
 
-      # Policy documents and provisioning helpers are rendered from the same
-      # parameters as the guests, through the same module evaluation, so that
-      # option defaults apply to them too. Nothing carrying a site value is
-      # written twice: a second copy is a second place where it can be wrong.
+      # One evaluation answers the questions the flake itself has to ask:
+      # which guests exist, what they are called, and where the policy
+      # documents and the provisioning script get their values. Reading them
+      # from an evaluated configuration rather than from the raw parameter
+      # file is what lets the option defaults apply to them too.
       reference = (mkHost "agent").config;
+
+      guests = reference.hermes.guests;
+
+      # A guest whose alias is set has no configuration of its own: its
+      # components are hosted by the guest it points at. The alias keeps the
+      # role addressable in the configuration that already references it,
+      # without creating a virtual machine that does not exist.
+      activeRoles = lib.filter
+        (role: guests.${role}.aliasOf == null)
+        (builtins.attrNames guests);
 
       baoPolicies = pkgs.callPackage ./policies {
         inherit (reference.hermes.secretStore) mount;
@@ -174,18 +172,24 @@
 
       # --- Gate: no unresolved placeholder may survive a build --------------
       # `nix flake check` fails while a single PLACEHOLDER_ marker is left in
-      # the repository. This is the cheapest way of stopping a partially
-      # configured environment from reaching the deployment phases, where the
-      # same defect costs an order of magnitude more to diagnose.
+      # a file the deployment actually reads. This is the cheapest way of
+      # stopping a partially configured environment from reaching the
+      # deployment phases, where the same defect costs an order of magnitude
+      # more to diagnose.
       #
-      # The check deliberately ignores ${...} references: those are runtime
+      # Files named *.example.* are exempt. They are templates by definition
+      # and their markers are the point: the operator copies them and fills in
+      # the copy, and it is the copy the check has to see.
+      #
+      # The check deliberately ignores ${...} references. Those are runtime
       # secrets rendered by the secret store agent and must never appear in
-      # the repository in any form. They are verified against the secret store
-      # itself, not against the working tree.
+      # the repository in any form, so they are verified against the secret
+      # store itself rather than against the working tree.
       checks.${system} = {
         no-unresolved-placeholders =
           pkgs.runCommand "no-unresolved-placeholders" { src = ./.; } ''
-            if grep -RIn --exclude-dir=.git -e 'PLACEHOLDER_[A-Z0-9_]\+' "$src" > found.txt
+            if grep -RIn --exclude-dir=.git --exclude='*.example.*' \
+                 -e 'PLACEHOLDER_[A-Z0-9_]\+' "$src" > found.txt
             then
               echo "Unresolved placeholders — see the variable tables in README.md:"
               cat found.txt

@@ -9,29 +9,33 @@
 #
 #     authelia crypto hash generate argon2 --password '...'
 #
-# Copy this file, fill it in, and point hermes.identity.usersFile at the copy.
+# The identities and groups below are the proposed values of the variable
+# matrix and match the defaults of hermes.identity. The hashes are placeholders
+# and always will be, which is why this file is rejected by the placeholder
+# check: copy it, fill in the hashes, and point hermes.identity.usersFile at
+# the copy.
 
 users:
-  PLACEHOLDER_IDENTITY_USER_A:
+  utente.a@proxlab:
     disabled: false
     displayname: 'Sample user A'
     password: 'PLACEHOLDER_ARGON2_HASH_USER_A'
-    email: PLACEHOLDER_IDENTITY_USER_A
+    email: utente.a@proxlab
     groups:
-      - PLACEHOLDER_AUTHELIA_GROUP_USERS
+      - hermes-users
 
-  PLACEHOLDER_IDENTITY_USER_B:
+  utente.b@proxlab:
     disabled: false
     displayname: 'Sample user B'
     password: 'PLACEHOLDER_ARGON2_HASH_USER_B'
-    email: PLACEHOLDER_IDENTITY_USER_B
+    email: utente.b@proxlab
     groups:
-      - PLACEHOLDER_AUTHELIA_GROUP_USERS
+      - hermes-users
 
-  PLACEHOLDER_IDENTITY_OPERATOR:
+  operator@proxlab:
     disabled: false
     displayname: 'Operator'
     password: 'PLACEHOLDER_ARGON2_HASH_OPERATOR'
-    email: PLACEHOLDER_IDENTITY_OPERATOR
+    email: operator@proxlab
     groups:
-      - PLACEHOLDER_AUTHELIA_GROUP_OPERATORS
+      - hermes-operators
