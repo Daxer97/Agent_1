@@ -1,0 +1,2 @@
+{"input": "PLACEHOLDER_QUESTION_1", "expected": "PLACEHOLDER_EXPECTED_ANSWER_1", "reference_ids": ["PLACEHOLDER_FACT_ID_1"], "metadata": {"topic": "PLACEHOLDER_TOPIC", "language": "PLACEHOLDER_LANGUAGE"}}
+{"input": "PLACEHOLDER_QUESTION_2", "expected": "PLACEHOLDER_EXPECTED_ANSWER_2", "reference_ids": ["PLACEHOLDER_FACT_ID_2", "PLACEHOLDER_FACT_ID_3"], "metadata": {"topic": "PLACEHOLDER_TOPIC", "language": "PLACEHOLDER_LANGUAGE"}}

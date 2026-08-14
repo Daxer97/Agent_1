@@ -1,0 +1,40 @@
+# Encryption rules for the bootstrap credentials.
+#
+# Each secrets file is encrypted for exactly two recipients: the administrator
+# and the host that must read it. Nobody else. A rule broad enough to let one
+# guest decrypt another guest's file defeats the separation of policies before
+# any policy is ever consulted, and it does so silently — the deployment
+# succeeds either way.
+#
+# The host keys are derived from the SSH host key of each guest:
+#
+#     ssh <guest> "cat /etc/ssh/ssh_host_ed25519_key.pub" | ssh-to-age
+#
+# After registering a key, re-encrypt the file it applies to:
+#
+#     sops updatekeys secrets/<host>.yaml
+#
+# The file names must match the host names declared in parameters.nix.
+
+keys:
+  - &admin PLACEHOLDER_AGE_KEY_ADMIN
+  - &host_ingress PLACEHOLDER_AGE_KEY_INGRESS
+  - &host_agent PLACEHOLDER_AGE_KEY_AGENT
+  - &host_memory PLACEHOLDER_AGE_KEY_MEMORY
+  - &host_secrets PLACEHOLDER_AGE_KEY_SECRETS
+
+creation_rules:
+  - path_regex: secrets/PLACEHOLDER_VM01_NAME\.yaml$
+    key_groups: [{ age: [*admin, *host_ingress] }]
+
+  - path_regex: secrets/PLACEHOLDER_VM02_NAME\.yaml$
+    key_groups: [{ age: [*admin, *host_agent] }]
+
+  - path_regex: secrets/PLACEHOLDER_VM03_NAME\.yaml$
+    key_groups: [{ age: [*admin, *host_memory] }]
+
+  # The observability role is aliased onto the secret store guest, so it reads
+  # the same file. Separating the two roles means adding a rule here and a key
+  # above, and nothing else.
+  - path_regex: secrets/PLACEHOLDER_VM04_NAME\.yaml$
+    key_groups: [{ age: [*admin, *host_secrets] }]

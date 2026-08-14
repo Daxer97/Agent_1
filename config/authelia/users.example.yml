@@ -1,0 +1,37 @@
+# Sample user population for the file backend.
+#
+# Adequate for a proof of concept. A directory backend is the expected choice
+# in service, and substituting it does not touch the access rules, which live
+# in modules/authelia.nix and are generated from the platform parameters.
+#
+# The password hashes are generated on the workstation and never appear in this
+# repository:
+#
+#     authelia crypto hash generate argon2 --password '...'
+#
+# Copy this file, fill it in, and point hermes.identity.usersFile at the copy.
+
+users:
+  PLACEHOLDER_IDENTITY_USER_A:
+    disabled: false
+    displayname: 'Sample user A'
+    password: 'PLACEHOLDER_ARGON2_HASH_USER_A'
+    email: PLACEHOLDER_IDENTITY_USER_A
+    groups:
+      - PLACEHOLDER_AUTHELIA_GROUP_USERS
+
+  PLACEHOLDER_IDENTITY_USER_B:
+    disabled: false
+    displayname: 'Sample user B'
+    password: 'PLACEHOLDER_ARGON2_HASH_USER_B'
+    email: PLACEHOLDER_IDENTITY_USER_B
+    groups:
+      - PLACEHOLDER_AUTHELIA_GROUP_USERS
+
+  PLACEHOLDER_IDENTITY_OPERATOR:
+    disabled: false
+    displayname: 'Operator'
+    password: 'PLACEHOLDER_ARGON2_HASH_OPERATOR'
+    email: PLACEHOLDER_IDENTITY_OPERATOR
+    groups:
+      - PLACEHOLDER_AUTHELIA_GROUP_OPERATORS

@@ -1,9 +1,89 @@
-# Ignore build outputs from performing a nix-build or `nix build` command
+# ---------------------------------------------------------------------------
+# Nix
+# ---------------------------------------------------------------------------
+
+# Build outputs of nix-build / nix build
 result
 result-*
 
-# Ignore automatically generated direnv output
+# direnv
 .direnv
 
-# Ignore NixOS interactive test driver history
+# Interactive NixOS test driver history
 **/.nixos-test-history
+
+# ---------------------------------------------------------------------------
+# Secrets
+#
+# The encrypted files under secrets/ ARE versioned: they hold ciphertext, and
+# the whole bootstrap chain depends on them travelling with the configuration.
+# What must never be committed is anything decrypted, and anything the secret
+# store agent renders at runtime.
+# ---------------------------------------------------------------------------
+
+*.dec
+*.dec.*
+*.decrypted
+*.decrypted.*
+secrets/**/*.plain.yaml
+
+# Runtime environment files. The template .env.example is versioned; a filled
+# .env is not, and nothing in the platform reads one from the working tree.
+.env
+.env.*
+!.env.example
+
+# Key material of any kind
+*.age
+*.pem
+*.key
+*.p12
+*.pfx
+!**/*.pub
+
+# ---------------------------------------------------------------------------
+# Proxmox and backup artefacts
+#
+# Backups are collected by the node onto the backup storage. Anything of this
+# shape inside the working tree is a copy that escaped that path, and a copy
+# outside the declared regime is exactly what the backup policy exists to
+# prevent.
+# ---------------------------------------------------------------------------
+
+*.vma
+*.vma.*
+*.qcow2
+*.raw
+*.img
+*.iso
+*.dump
+*.dump.age
+*.snap
+vzdump-*
+dump/
+
+# ---------------------------------------------------------------------------
+# Telemetry artefacts
+#
+# Trajectory files and event streams contain conversational content. They live
+# on the guests, under restricted permissions, and never in the repository.
+# ---------------------------------------------------------------------------
+
+atif/
+atof/
+*.jsonl
+!config/phoenix/datasets/*.jsonl
+trajectory-*.json
+
+# ---------------------------------------------------------------------------
+# Local tooling
+# ---------------------------------------------------------------------------
+
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
