@@ -62,38 +62,15 @@ credential.
 
 ### Execution planes and inference path
 
-```
-   user
-     │  HTTPS
-     ▼
-┌─────────────────────┐
-│  ingress (edge)     │  TLS termination · forward-auth · identity headers
-│  proxy · IdP · UI   │  identity → profile → bearer → path prefix
-└──────────┬──────────┘
-           │  bearer per profile, injected by the proxy
-           ▼
-┌─────────────────────────────────────────┐
-│  agentic guest (application zone)       │
-│                                         │
-│   API server ──▶ interactive container  │──┐
-│   timers     ──▶ programmatic container │──┤ internal token
-│                                         │  │
-│   egress broker  ◀──────────────────────┘  │
-│     holds the only real gateway key        │
-└──────────┬──────────────────────────────────┘
-           │  HTTPS, real credential
-           ▼
-   inference gateway ──▶ deliberation panel
-           ▲
-           │  extraction calls
-┌──────────┴──────────┐        ┌──────────────────────┐
-│  memory (data zone) │        │  secrets + telemetry │
-│  backend + store    │        │  (data zone)         │
-│  one bank / profile │        │  vault · collector · │
-└─────────────────────┘        │  metrics · logs ·    │
-                               │  traces + evaluation │
-                               └──────────────────────┘
-```
+<p align="center">
+  <img src="docs/architecture.svg" width="900" alt="Three network zones stacked vertically. The user reaches the edge zone over HTTPS; the reverse proxy injects a per-profile bearer and forwards to the API server in the application zone. The interactive and programmatic planes each present a distinct internal token to the egress broker, which holds the only real gateway credential and is the only component that talks to the external inference gateway. The data zone holds the observability stack, the secret store and the memory backend; memory extraction calls are routed back through the broker so that they appear in the cost figures.">
+</p>
+
+The diagram adapts to a light or dark reading environment on its own. What it
+asserts by absence is as much the point as what it draws: no path reaches the
+data zone from the user network, no path reaches the inference gateway except
+through the broker, and nothing connects the two execution planes to each
+other.
 
 ### Roles and guests
 
@@ -217,6 +194,9 @@ all.
 │   └── egress-broker/           source of the broker, built through uv2nix
 │
 ├── secrets/                     sops-encrypted bootstrap credentials, one per host
+│
+├── docs/
+│   └── architecture.svg         the diagram above; theme-aware, no external assets
 │
 └── config/                      versioned data artefacts, not machine configuration
     ├── authelia/users.example.yml
