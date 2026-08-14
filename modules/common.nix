@@ -43,7 +43,6 @@ in
     time.timeZone = cfg.network.timeZone;
 
     networking = {
-      hostName = guest.hostName;
       useDHCP = false;
       nameservers = cfg.network.nameservers;
       usePredictableInterfaceNames = false;

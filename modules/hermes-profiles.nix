@@ -66,7 +66,7 @@ in
     # generated identically wherever it is needed: the proxy resolves it at
     # the ingress, the runtime honours it in the application zone.
     {
-      environment.etc.${lib.removePrefix "/etc/" cfg.ingress.identityMapPath}.text =
+      environment.etc."hermes/identity-map.conf".text =
         lib.concatMapStringsSep "\n"
           (user: ''"${user.identity}" "${user.profile}";'')
           cfg.identity.users;

@@ -14,9 +14,7 @@
 #
 #     sops updatekeys secrets/<host>.yaml
 #
-# The file names must match the guest host names. They are the proposed values
-# of the variable matrix; if a guest is renamed in parameters.nix, rename its
-# file and the rule below in the same change.
+# The file names must match the host names declared in parameters.nix.
 
 keys:
   - &admin PLACEHOLDER_AGE_KEY_ADMIN
@@ -26,17 +24,17 @@ keys:
   - &host_secrets PLACEHOLDER_AGE_KEY_SECRETS
 
 creation_rules:
-  - path_regex: secrets/hrm-edge\.yaml$
+  - path_regex: secrets/PLACEHOLDER_VM01_NAME\.yaml$
     key_groups: [{ age: [*admin, *host_ingress] }]
 
-  - path_regex: secrets/hrm-app\.yaml$
+  - path_regex: secrets/PLACEHOLDER_VM02_NAME\.yaml$
     key_groups: [{ age: [*admin, *host_agent] }]
 
-  - path_regex: secrets/hrm-mem\.yaml$
+  - path_regex: secrets/PLACEHOLDER_VM03_NAME\.yaml$
     key_groups: [{ age: [*admin, *host_memory] }]
 
   # The observability role is aliased onto the secret store guest, so it reads
   # the same file. Separating the two roles means adding a rule here and a key
   # above, and nothing else.
-  - path_regex: secrets/hrm-sec\.yaml$
+  - path_regex: secrets/PLACEHOLDER_VM04_NAME\.yaml$
     key_groups: [{ age: [*admin, *host_secrets] }]
