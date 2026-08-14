@@ -1,0 +1,167 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 760" width="980" height="760" role="img" aria-labelledby="ttl dsc">
+  <title id="ttl">agent_1 — execution planes and inference path</title>
+  <desc id="dsc">Three network zones stacked vertically. The user reaches the edge zone over HTTPS; the reverse proxy injects a per-profile bearer and forwards to the API server in the application zone. Two execution planes, interactive and programmatic, each present a distinct internal token to the egress broker, which is the only component holding the real inference gateway credential and the only one that talks to the external gateway. The data zone holds the secret store, the observability stack and the memory backend; memory extraction calls are routed back through the broker so that they appear in the cost figures.</desc>
+  <defs>
+    <style>
+      :root {
+        --bg:        #ffffff;
+        --zone-fill: #f6f8fa;
+        --zone-line: #d8dee4;
+        --box-fill:  #ffffff;
+        --box-line:  #9198a1;
+        --text:      #1f2328;
+        --muted:     #59636e;
+        --accent:    #bc4c00;
+        --accent-bg: #fff4ec;
+        --memory:    #0969da;
+        --line:      #6e7681;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg:        #0d1117;
+          --zone-fill: #161b22;
+          --zone-line: #30363d;
+          --box-fill:  #0d1117;
+          --box-line:  #6e7681;
+          --text:      #e6edf3;
+          --muted:     #9198a1;
+          --accent:    #ff9b72;
+          --accent-bg: #2b1a12;
+          --memory:    #4493f8;
+          --line:      #7d8590;
+        }
+      }
+      .bg      { fill: var(--bg); }
+      .zone    { fill: var(--zone-fill); stroke: var(--zone-line); stroke-width: 1; }
+      .box     { fill: var(--box-fill);  stroke: var(--box-line);  stroke-width: 1; }
+      .box-acc { fill: var(--accent-bg); stroke: var(--accent);    stroke-width: 1.6; }
+
+      text { font-family: ui-sans-serif, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+      .t-title { font-size: 13px; font-weight: 600; fill: var(--text); }
+      .t-acc   { font-size: 13px; font-weight: 600; fill: var(--accent); }
+      .t-sub   { font-size: 10.5px; font-weight: 400; fill: var(--muted); }
+      .t-zone  { font-size: 10.5px; font-weight: 600; fill: var(--muted); letter-spacing: 0.6px;
+                 stroke: var(--zone-fill); stroke-width: 4; paint-order: stroke fill; }
+      .t-label { font-size: 9.5px; fill: var(--muted);
+                 stroke: var(--bg); stroke-width: 3.5; paint-order: stroke fill; }
+      .t-lgnd  { font-size: 10px; fill: var(--muted); }
+
+      .ln      { fill: none; stroke: var(--line);    stroke-width: 1.4; }
+      .ln-rule { fill: none; stroke: var(--zone-line); stroke-width: 1; }
+      .ln-acc  { fill: none; stroke: var(--accent);  stroke-width: 2.4; }
+      .ln-mem  { fill: none; stroke: var(--memory);  stroke-width: 1.6; }
+      .ln-dash { fill: none; stroke: var(--line);    stroke-width: 1.2; stroke-dasharray: 6 4; }
+      .ln-dot  { fill: none; stroke: var(--line);    stroke-width: 1.2; stroke-dasharray: 2 4;
+                 stroke-linecap: round; }
+
+      .mk     { fill: var(--line); }
+      .mk-acc { fill: var(--accent); }
+      .mk-mem { fill: var(--memory); }
+    </style>
+
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="mk" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+    <marker id="arrow-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path class="mk-acc" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+    <marker id="arrow-mem" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="mk-mem" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
+  <rect class="bg" x="0" y="0" width="980" height="760"/>
+  <rect class="zone" x="24" y="96" width="580" height="120" rx="10"/>
+  <rect class="zone" x="24" y="256" width="580" height="206" rx="10"/>
+  <rect class="zone" x="24" y="516" width="580" height="184" rx="10"/>
+  <rect class="box" x="229" y="24" width="160" height="44" rx="6"/>
+  <rect class="box" x="44" y="140" width="160" height="58" rx="6"/>
+  <rect class="box" x="224" y="140" width="170" height="58" rx="6"/>
+  <rect class="box" x="414" y="140" width="170" height="58" rx="6"/>
+  <rect class="box" x="44" y="300" width="140" height="56" rx="6"/>
+  <rect class="box" x="214" y="300" width="160" height="56" rx="6"/>
+  <rect class="box" x="44" y="376" width="140" height="56" rx="6"/>
+  <rect class="box" x="214" y="376" width="160" height="56" rx="6"/>
+  <rect class="box-acc" x="414" y="300" width="170" height="132" rx="6"/>
+  <rect class="box" x="44" y="560" width="160" height="96" rx="6"/>
+  <rect class="box" x="224" y="560" width="170" height="96" rx="6"/>
+  <rect class="box" x="414" y="560" width="170" height="96" rx="6"/>
+  <rect class="box" x="680" y="328" width="272" height="76" rx="6"/>
+  <path class="ln" d="M309,68 L309,136" marker-end="url(#arrow)"/>
+  <path class="ln" d="M309,198 L309,232 L114,232 L114,296" marker-end="url(#arrow)"/>
+  <path class="ln" d="M184,328 L210,328" marker-end="url(#arrow)"/>
+  <path class="ln" d="M184,404 L210,404" marker-end="url(#arrow)"/>
+  <path class="ln" d="M374,328 L410,328" marker-end="url(#arrow)"/>
+  <path class="ln" d="M374,404 L410,404" marker-end="url(#arrow)"/>
+  <path class="ln-acc" d="M584,366 L676,366" marker-end="url(#arrow-acc)"/>
+  <path class="ln-mem" d="M374,345 L394,345 L394,474 L499,474 L499,556" marker-end="url(#arrow-mem)"/>
+  <path class="ln-mem" d="M539,556 L539,436" marker-end="url(#arrow-mem)"/>
+  <path class="ln-dash" d="M340,462 L340,490 L309,490 L309,556" marker-end="url(#arrow)"/>
+  <path class="ln-dot" d="M240,462 L240,506 L124,506 L124,556" marker-end="url(#arrow)"/>
+  <path class="ln-rule" d="M24,702 L952,702"/>
+  <path class="ln-acc" d="M24,728 L50,728"/>
+  <path class="ln-mem" d="M392,728 L418,728"/>
+  <path class="ln-dash" d="M556,728 L582,728"/>
+  <path class="ln-dot" d="M724,728 L750,728"/>
+  <text class="t-zone" x="40" y="118">ZONE EDGE — reachable from the user network</text>
+  <text class="t-zone" x="40" y="278">ZONE APP — the only host running model-generated code</text>
+  <text class="t-zone" x="40" y="538">ZONE DATA — not routable from the user network</text>
+  <text class="t-title" x="309" y="50.5" text-anchor="middle">User
+  </text>
+  <text class="t-title" x="124" y="166.5" text-anchor="middle">Identity provider
+    <tspan class="t-sub" x="124" dy="15">second factor · groups</tspan>
+  </text>
+  <text class="t-title" x="309" y="166.5" text-anchor="middle">Reverse proxy
+    <tspan class="t-sub" x="309" dy="15">TLS · forward-auth</tspan>
+  </text>
+  <text class="t-title" x="499" y="166.5" text-anchor="middle">Chat interface
+    <tspan class="t-sub" x="499" dy="15">bound to loopback</tspan>
+  </text>
+  <text class="t-title" x="114" y="325.5" text-anchor="middle">API server
+    <tspan class="t-sub" x="114" dy="15">bound to loopback</tspan>
+  </text>
+  <text class="t-title" x="294" y="325.5" text-anchor="middle">Interactive
+    <tspan class="t-sub" x="294" dy="15">one profile per user</tspan>
+  </text>
+  <text class="t-title" x="114" y="401.5" text-anchor="middle">Timers
+    <tspan class="t-sub" x="114" dy="15">no listening port</tspan>
+  </text>
+  <text class="t-title" x="294" y="401.5" text-anchor="middle">Programmatic
+    <tspan class="t-sub" x="294" dy="15">service profiles</tspan>
+  </text>
+  <text class="t-acc" x="499" y="335.5" text-anchor="middle">Egress broker
+    <tspan class="t-sub" x="499" dy="15">holds the only real</tspan>
+    <tspan class="t-sub" x="499" dy="14">gateway credential</tspan>
+    <tspan class="t-sub" x="499" dy="14"></tspan>
+    <tspan class="t-sub" x="499" dy="14">each plane presents a</tspan>
+    <tspan class="t-sub" x="499" dy="14">distinct internal token</tspan>
+  </text>
+  <text class="t-title" x="124" y="591.5" text-anchor="middle">Observability
+    <tspan class="t-sub" x="124" dy="15">collector · metrics</tspan>
+    <tspan class="t-sub" x="124" dy="14">logs · traces</tspan>
+    <tspan class="t-sub" x="124" dy="14">evaluation platform</tspan>
+  </text>
+  <text class="t-title" x="309" y="598.5" text-anchor="middle">Secret store
+    <tspan class="t-sub" x="309" dy="15">policy per identity</tspan>
+    <tspan class="t-sub" x="309" dy="14">audit device</tspan>
+  </text>
+  <text class="t-title" x="499" y="598.5" text-anchor="middle">Memory
+    <tspan class="t-sub" x="499" dy="15">vector + graph store</tspan>
+    <tspan class="t-sub" x="499" dy="14">one bank per profile</tspan>
+  </text>
+  <text class="t-title" x="816" y="356.5" text-anchor="middle">Inference gateway
+    <tspan class="t-sub" x="816" dy="15">external · routing, deliberation</tspan>
+    <tspan class="t-sub" x="816" dy="14">panel, pricing, accounting</tspan>
+  </text>
+  <text class="t-zone" x="816" y="314" text-anchor="middle">OUTSIDE THE PERIMETER</text>
+  <text class="t-label" x="319" y="108" text-anchor="start">HTTPS 443</text>
+  <text class="t-label" x="211" y="226" text-anchor="middle">bearer per profile, injected by the proxy</text>
+  <text class="t-label" x="630" y="358" text-anchor="middle">real credential</text>
+  <text class="t-label" x="447" y="468" text-anchor="middle">recall · retain</text>
+  <text class="t-label" x="549" y="500" text-anchor="start">extraction calls</text>
+  <text class="t-label" x="325" y="484" text-anchor="middle">AppRole</text>
+  <text class="t-label" x="182" y="500" text-anchor="middle">OTLP</text>
+  <text class="t-lgnd" x="58" y="732" text-anchor="start">inference path — the credential is substituted here</text>
+  <text class="t-lgnd" x="426" y="732" text-anchor="start">memory path</text>
+  <text class="t-lgnd" x="590" y="732" text-anchor="start">secret retrieval</text>
+  <text class="t-lgnd" x="758" y="732" text-anchor="start">telemetry</text>
+</svg>
