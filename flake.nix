@@ -182,10 +182,18 @@
       # secrets rendered by the secret store agent and must never appear in
       # the repository in any form. They are verified against the secret store
       # itself, not against the working tree.
+      #
+      # It also ignores the *.example.* templates. Those files are versioned
+      # unfilled on purpose — they are what a site is copied from — so their
+      # markers are the one case where a placeholder is the correct content. A
+      # gate that reports them reports something on every run, and a gate that
+      # is always red stops being read, which is the failure mode it exists to
+      # prevent.
       checks.${system} = {
         no-unresolved-placeholders =
           pkgs.runCommand "no-unresolved-placeholders" { src = ./.; } ''
-            if grep -RIn --exclude-dir=.git -e 'PLACEHOLDER_[A-Z0-9_]\+' "$src" > found.txt
+            if grep -RIn --exclude-dir=.git --exclude='*.example.*' \
+                 -e 'PLACEHOLDER_[A-Z0-9_]\+' "$src" > found.txt
             then
               echo "Unresolved placeholders — see the variable tables in README.md:"
               cat found.txt

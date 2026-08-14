@@ -1,0 +1,52 @@
+# Sample user population for the file backend.
+#
+# Filled from HERMES-AGENT-POC-VARS v1.7: two sample users and one operator are
+# what the design asks for — enough to exercise the isolation objective and the
+# risk of one identity reaching another's memory bank. The identities and the
+# groups below are the same values declared in parameters.nix; they are written
+# twice because the identity provider reads a file and the platform reads an
+# option, and the check that keeps them in step is that the identity map is
+# generated from the option, never from this file.
+#
+# The password hashes are the only values still missing. They are generated on
+# the workstation and pasted in here:
+#
+#     authelia crypto hash generate argon2 --password '...'
+#
+# The result is an argon2id hash, not a password. It is still worth treating as
+# sensitive: a hash committed once is a hash to rotate, and the repository keeps
+# history. Second factors are registered by the users themselves at first login
+# and live in the provider's own store, not here.
+#
+# A directory backend is the expected choice in service, and substituting it
+# does not touch the access rules, which live in modules/authelia.nix and are
+# generated from the platform parameters.
+
+users:
+  utente.a@proxlab:
+    disabled: false
+    displayname: 'Utente A'
+    password: 'PLACEHOLDER_ARGON2_HASH_USER_A'
+    email: utente.a@proxlab
+    groups:
+      - hermes-users
+
+  utente.b@proxlab:
+    disabled: false
+    displayname: 'Utente B'
+    password: 'PLACEHOLDER_ARGON2_HASH_USER_B'
+    email: utente.b@proxlab
+    groups:
+      - hermes-users
+
+  # Access to the memory inspection console and to the evaluation console. It
+  # is deliberately not one of the two users above: the operator sees the
+  # memory of the platform, and an identity that both converses and inspects
+  # makes the separation impossible to demonstrate.
+  operator@proxlab:
+    disabled: false
+    displayname: 'Operator'
+    password: 'PLACEHOLDER_ARGON2_HASH_OPERATOR'
+    email: operator@proxlab
+    groups:
+      - hermes-operators

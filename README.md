@@ -159,6 +159,7 @@ all.
 ├── flake.nix                    single point of truth; builds every guest
 ├── flake.lock                   resolved inputs — generated, see below
 ├── parameters.example.nix       site parameter template (copy to parameters.nix)
+├── parameters.nix               the values of this installation, versioned
 ├── .sops.yaml                   per-host encryption rules for the bootstrap secrets
 ├── .env.example                 runtime variables, documented by secret-store path
 │
@@ -200,6 +201,7 @@ all.
 │
 └── config/                      versioned data artefacts, not machine configuration
     ├── authelia/users.example.yml
+    ├── authelia/users.yml       the population of this installation
     └── phoenix/datasets/        the versioned evaluation set
 ```
 
@@ -316,7 +318,6 @@ An authentication error from the gateway is a pass: it proves reachability.
 Fill in the parameters, then let the flake generate the provisioning commands:
 
 ```sh
-cp parameters.example.nix parameters.nix
 $EDITOR parameters.nix                       # then set parametersReviewed = true
 nix flake check                              # fails while a placeholder survives
 

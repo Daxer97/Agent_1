@@ -14,7 +14,15 @@
 #
 #     sops updatekeys secrets/<host>.yaml
 #
-# The file names must match the host names declared in parameters.nix.
+# The file names match the host names declared in parameters.nix: hrm-edge,
+# hrm-app, hrm-mem, hrm-sec.
+#
+# The five keys below are the only values here that cannot be filled in
+# advance. The administrator's key is produced by `age-keygen` on the
+# workstation; the four host keys do not exist until the guests do, because
+# they are derived from each guest's SSH host key with the command above. Their
+# markers are left in place so that `nix flake check` keeps reporting them by
+# name until they are registered.
 
 keys:
   - &admin PLACEHOLDER_AGE_KEY_ADMIN
@@ -24,17 +32,17 @@ keys:
   - &host_secrets PLACEHOLDER_AGE_KEY_SECRETS
 
 creation_rules:
-  - path_regex: secrets/PLACEHOLDER_VM01_NAME\.yaml$
+  - path_regex: secrets/hrm-edge\.yaml$
     key_groups: [{ age: [*admin, *host_ingress] }]
 
-  - path_regex: secrets/PLACEHOLDER_VM02_NAME\.yaml$
+  - path_regex: secrets/hrm-app\.yaml$
     key_groups: [{ age: [*admin, *host_agent] }]
 
-  - path_regex: secrets/PLACEHOLDER_VM03_NAME\.yaml$
+  - path_regex: secrets/hrm-mem\.yaml$
     key_groups: [{ age: [*admin, *host_memory] }]
 
   # The observability role is aliased onto the secret store guest, so it reads
   # the same file. Separating the two roles means adding a rule here and a key
   # above, and nothing else.
-  - path_regex: secrets/PLACEHOLDER_VM04_NAME\.yaml$
+  - path_regex: secrets/hrm-sec\.yaml$
     key_groups: [{ age: [*admin, *host_secrets] }]
