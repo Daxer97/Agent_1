@@ -282,6 +282,21 @@
         zone = "data";
         address = "10.102.0.14";
         bootOrder = 5;
+
+        # Declared here as well as on the secret store guest, and ignored for
+        # as long as the alias stands: an aliased guest is not created, so
+        # this volume exists once. It is what makes the de-consolidation the
+        # comment above describes a single line — without it the separated
+        # guest would come up with a root volume and nothing else, and the
+        # three backends would land on it exactly as they would have without
+        # the volume at all. What does not happen by itself is the reverse:
+        # the volume left behind on the secret store guest has to be removed
+        # by hand once nothing writes to it.
+        extraDisks = [{
+          sizeGb = 32;
+          storage = "local-lvm";
+          mountPoint = "/var/lib/observability";
+        }];
       };
     };
 
