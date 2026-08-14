@@ -58,10 +58,13 @@
       bridge = "PLACEHOLDER_PVE_BRIDGE";
       managementCidr = "198.18.0.0/24";
 
+      # The gateway of each zone is the router interface serving it, and it is
+      # the only way out of the zone: every inter-zone flow is routed through
+      # the device upstream.
       zones = {
-        edge = { vlanId = 100; cidr = "192.0.2.0/24"; };
-        app = { vlanId = 101; cidr = "198.51.100.0/24"; };
-        data = { vlanId = 102; cidr = "203.0.113.0/24"; };
+        edge = { vlanId = 100; cidr = "192.0.2.0/24"; gateway = "192.0.2.1"; };
+        app = { vlanId = 101; cidr = "198.51.100.0/24"; gateway = "198.51.100.1"; };
+        data = { vlanId = 102; cidr = "203.0.113.0/24"; gateway = "203.0.113.1"; };
       };
 
       # The perimeter device applying the outbound policy. Restricting the
@@ -414,7 +417,10 @@
       regulation = { maxRetries = 3; findTime = "2m"; banTime = "15m"; };
       logLevel = "info";
 
-      usersFile = ./config/authelia/users.example.yml;
+      # The population itself is not a parameter: it holds password digests,
+      # so it travels encrypted with the bootstrap credentials of the ingress
+      # guest, under the key authelia/users_file. Its shape is documented in
+      # config/authelia/users.example.yml.
     };
 
     # ======================================================================

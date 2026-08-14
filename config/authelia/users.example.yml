@@ -1,15 +1,41 @@
-# Sample user population for the file backend.
+# Shape of the sample user population.
 #
-# Adequate for a proof of concept. A directory backend is the expected choice
-# in service, and substituting it does not touch the access rules, which live
-# in modules/authelia.nix and are generated from the platform parameters.
+# THIS FILE IS NOT READ BY ANYTHING. It documents the shape of a value that
+# lives elsewhere: the population holds argon2id digests, so it travels
+# encrypted with the bootstrap credential of the ingress guest and is
+# decrypted at activation into /etc/authelia/users.yml, owned by the identity
+# provider and readable by nobody else.
 #
-# The password hashes are generated on the workstation and never appear in this
-# repository:
+# It is not a Nix store path either. The store is readable by every user of
+# the system, which for a digest is the difference between a credential that
+# has to be brute-forced remotely, under the provider's own rate limit, and
+# one that can be attacked offline by any local account.
+#
+# Generate the digests on the workstation:
 #
 #     authelia crypto hash generate argon2 --password '...'
 #
-# Copy this file, fill it in, and point hermes.identity.usersFile at the copy.
+# Then put the whole document below — identities, groups and digests — into
+# the guest's encrypted file under the key authelia/users_file:
+#
+#     sops secrets/hrm-edge.yaml
+#
+#     authelia:
+#       users_file: |
+#         users:
+#           ...
+#
+# The identities and the group names must match hermes.identity in
+# parameters.nix. Nothing in the platform verifies that they do: an identity
+# listed there and missing here never logs in, and one present here and
+# missing there keeps whatever these groups grant. The access rules are
+# generated from the parameters; the population is not.
+#
+# Second factors are registered by each user at first login and live in the
+# provider's own store, not in this document.
+#
+# A directory backend is the expected choice in service, and substituting it
+# does not touch the access rules, which live in modules/authelia.nix.
 
 users:
   PLACEHOLDER_IDENTITY_USER_A:
@@ -28,6 +54,9 @@ users:
     groups:
       - PLACEHOLDER_AUTHELIA_GROUP_USERS
 
+  # Deliberately not one of the two users above: the operator sees the memory
+  # of the platform, and an identity that both converses and inspects makes
+  # the separation impossible to demonstrate.
   PLACEHOLDER_IDENTITY_OPERATOR:
     disabled: false
     displayname: 'Operator'

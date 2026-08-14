@@ -200,8 +200,7 @@ all.
 │   └── architecture.svg         the diagram above; theme-aware, no external assets
 │
 └── config/                      versioned data artefacts, not machine configuration
-    ├── authelia/users.example.yml
-    ├── authelia/users.yml       the population of this installation
+    ├── authelia/users.example.yml   shape of the user population, not read
     └── phoenix/datasets/        the versioned evaluation set
 ```
 
@@ -220,8 +219,11 @@ definitions, the instrumentation documents, the secret-store policies and the
 node provisioning script are all rendered from the typed options. The mount
 point, the ports and the addresses are written once; a rename cannot leave a
 stale copy behind. Where a document is genuinely data rather than
-configuration — the evaluation dataset, the sample user file — it stays a
-versioned file under `config/`.
+configuration — the evaluation dataset — it stays a versioned file under
+`config/`. The one artefact that looks like it belongs there and does not is
+the user population: it holds password digests, so it travels encrypted with
+the bootstrap credentials instead, and `config/authelia/users.example.yml`
+documents its shape without being read by anything.
 
 ---
 
@@ -875,7 +877,6 @@ Declared per role under `hermes.guests.<role>`, where `<role>` is one of
 | `hermes.identity.regulation.findTime` | duration | Window over which failures are counted. | `2m` |
 | `hermes.identity.regulation.banTime` | duration | Duration of the ban. | `15m` |
 | `hermes.identity.logLevel` | enum | Log level of the identity provider. | `info` |
-| `hermes.identity.usersFile` | path | File backend holding the user population. A directory backend is the expected choice in service, and substituting it does not touch the access rules. | — |
 
 ### Ingress
 

@@ -41,6 +41,20 @@ let
     HERMES_MAX_SPAWN_DEPTH = toString cfg.agent.maxSpawnDepth;
     HERMES_MAX_CONCURRENT_CHILDREN = toString cfg.agent.maxConcurrentChildren;
 
+    # Bounds and breakers. Declared here rather than left to the client
+    # defaults: the recall bound in particular is what turns an unreachable
+    # memory backend into a degraded turn instead of a stalled one, and a
+    # bound that is never applied degrades nothing — the turn waits, no error
+    # reaches the user, and the alert that watches for it only sees the
+    # latency afterwards.
+    HERMES_TIMEOUT_INFERENCE = cfg.agent.timeouts.inference;
+    HERMES_TIMEOUT_RECALL = cfg.agent.timeouts.recall;
+    HERMES_RETRY_BROKER = toString cfg.agent.retries.broker;
+    HERMES_RETRY_MEMORY = toString cfg.agent.retries.memory;
+    HERMES_CB_BROKER_THRESHOLD = toString cfg.agent.circuitBreaker.brokerThreshold;
+    HERMES_CB_BROKER_RESET = cfg.agent.circuitBreaker.brokerReset;
+    HERMES_CB_MEMORY_THRESHOLD = toString cfg.agent.circuitBreaker.memoryThreshold;
+
     OTEL_EXPORTER_OTLP_ENDPOINT = otlpEndpoint;
   };
 
@@ -75,6 +89,14 @@ let
     retain_async = true;
     retain_every_n_turns = cfg.memory.hindsight.retainEveryNTurns;
     memory_mode = cfg.memory.hindsight.memoryMode;
+
+    # Past this the recall is skipped rather than awaited. It is the same
+    # bound as HERMES_TIMEOUT_RECALL, declared on the client that performs the
+    # call as well as in the environment, because whichever of the two the
+    # runtime honours it must not fall back to a library default measured in
+    # tens of seconds.
+    recall_timeout = cfg.agent.timeouts.recall;
+    recall_retries = cfg.agent.retries.memory;
   };
 in
 {
@@ -99,6 +121,14 @@ in
       # permissions, and no exporter towards a shared backend.
       "d ${cfg.observability.instrumentation.trajectoryPath} 0700 hermes hermes -"
       "d ${cfg.observability.instrumentation.eventsPath} 0750 hermes hermes -"
+
+      # Their retention is declared, so it has to be applied by something. The
+      # metric and log backends prune themselves; these are plain files on the
+      # guest, and nothing else would ever remove them. A declared regime that
+      # no process enforces is the same as no regime, except that it reads
+      # like one.
+      "e ${cfg.observability.instrumentation.trajectoryPath} 0700 hermes hermes ${cfg.observability.retention.trajectory}"
+      "e ${cfg.observability.instrumentation.eventsPath} 0750 hermes hermes ${toString cfg.observability.retention.observability}d"
     ];
 
     # ---------------------------------------------------- interactive plane
@@ -107,6 +137,17 @@ in
       privateNetwork = true;
       hostAddress = cfg.network.containerHostAddress;
       localAddress = cfg.network.containerInteractiveAddress;
+
+      # The API server listens on the container network, which no other guest
+      # can reach. This is what carries the proxy's request the last hop, from
+      # the guest address the ingress connects to into the container. Without
+      # it the firewall rule admitting the port and the proxy target both
+      # point at an address on which nothing is listening.
+      forwardPorts = [{
+        containerPort = cfg.agent.api.port;
+        hostPort = cfg.agent.api.port;
+        protocol = "tcp";
+      }];
 
       bindMounts = {
         "${runtime}" = { hostPath = runtime; isReadOnly = true; };

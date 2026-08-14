@@ -28,6 +28,20 @@ the agent runtime and the egress broker. They are separate identities on
 purpose — the broker holds the only policy able to read an inference
 credential, and the runtime must not inherit it.
 
+The ingress guest carries one additional key. The identity provider's user
+file holds password digests, and it cannot come from the secret store for the
+same reason the bootstrap credential cannot: the provider must be able to
+authenticate before anything else on that guest works. It is decrypted at
+activation into `/etc/authelia/users.yml`, owned by the provider and readable
+by nobody else.
+
+```yaml
+authelia:
+  users_file: |
+    users:
+      ...            # shape in config/authelia/users.example.yml
+```
+
 ## Creating a file
 
 ```sh

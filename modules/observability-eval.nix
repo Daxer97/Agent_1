@@ -61,6 +61,23 @@ in
         PHOENIX_DEFAULT_RETENTION_POLICY_DAYS = toString eval.retentionDays;
         PHOENIX_PROJECT_NAME = eval.projectName;
         PHOENIX_LOGGING_LEVEL = cfg.observability.logLevel;
+
+        # The experiment side of the platform. Without these the judge runs on
+        # whatever the platform defaults to, at whatever temperature, over
+        # whatever set happens to be loaded — and a judge weaker than the
+        # model being judged measures the judge, while a non-deterministic one
+        # does not detect drift but imitates it.
+        #
+        # The evaluators reach the gateway through the broker, never directly:
+        # the base address below is the broker's, and the credential is the
+        # evaluation token rendered into phoenix.env, which carries no access
+        # to the inference paths.
+        HERMES_EVAL_MODEL = cfg.models.evaluation;
+        HERMES_EVAL_TEMPERATURE = toString eval.temperature;
+        HERMES_EVAL_CONCURRENCY = toString eval.concurrency;
+        HERMES_EVAL_DATASET = eval.dataset;
+        HERMES_EVAL_EVALUATORS = lib.concatStringsSep "," eval.evaluators;
+        OPENAI_BASE_URL = "http://${cfg.broker.host}:${toString cfg.broker.port}/v1";
       };
 
       serviceConfig = {

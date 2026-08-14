@@ -10,6 +10,15 @@
 let
   cfg = config.hermes;
   store = cfg.secretStore;
+
+  durationDays = value:
+    let
+      match = builtins.match "([0-9]+)(ms|s|m|h|d)?" value;
+      amount = lib.toInt (lib.head match);
+      unit = if lib.last match == null then "s" else lib.last match;
+      seconds = amount * { ms = 1; s = 1; m = 60; h = 3600; d = 86400; }.${unit};
+    in
+    (seconds + 86399) / 86400;
 in
 {
   config = lib.mkIf (builtins.elem "secrets" cfg.rolesHosted) {
@@ -46,6 +55,26 @@ in
       "d ${store.auditPath}    0700 openbao openbao -"
       "d ${cfg.backup.stagingPath} 0700 root root -"
     ];
+
+    # The audit trail has a declared retention, longer than the general one
+    # because it is the documentary evidence that the separation of policies
+    # is applied rather than merely declared. Nothing else would rotate it: it
+    # is a file the store appends to for as long as it runs, on the guest
+    # whose disk already carries every observability backend.
+    #
+    # Copied and truncated rather than renamed: the store holds the descriptor
+    # open, and a rotation that renames the file leaves it writing to an inode
+    # with no name — the trail keeps growing and stops being readable.
+    services.logrotate.settings.openbao-audit = {
+      files = "${store.auditPath}/*.log";
+      frequency = "daily";
+      rotate = durationDays cfg.observability.retention.audit;
+      maxage = durationDays cfg.observability.retention.audit;
+      copytruncate = true;
+      compress = true;
+      missingok = true;
+      notifempty = true;
+    };
 
     # The unseal method is an operational choice with a consequence worth
     # knowing before it is discovered at three in the morning: with manual

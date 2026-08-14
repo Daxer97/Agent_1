@@ -32,10 +32,49 @@ let
       name = "eth${toString index}";
       address = interface.address;
       prefix = prefixLength interface.zone;
+      zone = interface.zone;
     })
     guest.extraInterfaces;
 
   allInterfaces = [ primaryInterface ] ++ extraInterfaces;
+
+  # Zones this guest has an interface in. Everything else it reaches through a
+  # router.
+  attachedZones = [ guest.zone ] ++ (map (interface: interface.zone) guest.extraInterfaces);
+
+  unattachedZones = lib.filter
+    (name: !(builtins.elem name attachedZones))
+    (builtins.attrNames cfg.network.zones);
+
+  # A dual-homed guest is dual-homed for a reason: the flows towards the
+  # downstream services must leave from its application interface. The default
+  # route points at the zone of the primary interface, so without an explicit
+  # route the reply to a request bound to the application address would leave
+  # through the other one — the packet is not dropped by anything here, it is
+  # dropped upstream, on a path nobody is looking at.
+  applicationInterface = lib.findFirst
+    (interface: interface.zone == "app")
+    null
+    extraInterfaces;
+
+  routeTo = zone: {
+    address = lib.head (lib.splitString "/" (zoneOf zone).cidr);
+    prefixLength = prefixLength zone;
+    via = (zoneOf zone).gateway;
+  };
+
+  # Volumes attached to this guest beyond its root disk. They are created by
+  # the provisioning script as additional SCSI devices, in declaration order,
+  # and the guest sees them as /dev/sdb, /dev/sdc, and so on. Declaring the
+  # mount is what makes the separation real: attached and unmounted, the path
+  # is an ordinary directory on the root volume and the growth it was meant to
+  # contain lands on the disk of whatever else the guest runs.
+  extraVolumes = lib.imap0
+    (index: disk: {
+      inherit (disk) mountPoint;
+      device = "/dev/sd${lib.elemAt lib.lowerChars (index + 1)}";
+    })
+    guest.extraDisks;
 in
 {
   config = {
@@ -53,9 +92,37 @@ in
             address = interface.address;
             prefixLength = interface.prefix;
           }];
+
+          # Zones the guest is not attached to are reached through the
+          # application interface when it has one, so that the flow leaves
+          # from the address the downstream rules admit.
+          ipv4.routes = lib.optionals
+            (applicationInterface != null && interface.name == applicationInterface.name)
+            (map routeTo unattachedZones);
         })
         allInterfaces);
+
+      # Out of the zone: the resolver, the time source, the management range
+      # and — for every guest but the dual-homed one — the other two zones.
+      defaultGateway = {
+        address = (zoneOf guest.zone).gateway;
+        interface = primaryInterface.name;
+      };
     };
+
+    # The additional volumes, mounted where they were declared to be. Formatted
+    # on first boot if they carry no filesystem: the provisioning script
+    # attaches raw devices, and a volume that is attached and unmounted is
+    # indistinguishable from a directory on the root disk until the day it
+    # matters.
+    fileSystems = lib.listToAttrs (map
+      (volume: lib.nameValuePair volume.mountPoint {
+        device = volume.device;
+        fsType = "ext4";
+        autoFormat = true;
+        options = [ "noatime" ];
+      })
+      extraVolumes);
 
     services.timesyncd = {
       enable = true;

@@ -45,16 +45,28 @@ let
   inboundByRole = {
     ingress = [
       "tcp dport 443 accept comment \"only flow admitted from the user network\""
+
+      # The collector pulls this one: without the rule the identity provider
+      # is permanently down as far as the platform is concerned, and the
+      # availability alert fires against a healthy service.
+      "ip saddr ${addressOf "observability"} tcp dport ${toString cfg.identity.metricsPort} accept comment \"identity provider metrics scrape\""
     ];
 
     agent = [
       "ip saddr ${ingressAppAddress} tcp dport ${toString cfg.agent.api.port} accept comment \"API server, from the ingress application interface only\""
       "ip saddr ${addressOf "memory"} tcp dport ${toString cfg.broker.port} accept comment \"memory extraction calls towards the broker\""
+
+      # Two flows, one rule, both from the observability guest and both
+      # towards the broker: the metric scrape, and the evaluator calls, which
+      # go through the broker like every other call — the containment of the
+      # inference credential admits no exception for evaluators.
+      "ip saddr ${addressOf "observability"} tcp dport ${toString cfg.broker.port} accept comment \"broker metrics scrape and evaluator calls\""
     ];
 
     memory = [
       "ip saddr ${addressOf "agent"} tcp dport ${toString cfg.memory.hindsight.apiPort} accept comment \"recall and retain, from the agentic guest only\""
       "ip saddr ${ingressAppAddress} tcp dport ${toString cfg.memory.hindsight.controlPlanePort} accept comment \"inspection console, through the proxy only\""
+      "ip saddr ${addressOf "observability"} tcp dport ${toString cfg.memory.hindsight.apiPort} accept comment \"memory backend metrics scrape\""
     ];
 
     secrets = [

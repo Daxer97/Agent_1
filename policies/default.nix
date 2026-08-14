@@ -46,13 +46,21 @@ let
 
     # The agentic guest must not be able to read the inference credentials.
     hermes = ''
-      # Its own internal token towards the broker, and nothing more.
+      # Its own internal token towards the broker, and nothing more. Read
+      # only: the tokens of the two planes live as keys of this one secret,
+      # and this identity has no business rewriting them.
       path "${mount}/data/broker/tokens" {
         capabilities = ["read"]
       }
 
-      path "${mount}/data/broker/tokens/*" {
-        capabilities = ["read"]
+      # Per-profile tokens. The provisioning unit runs on this guest and
+      # creates the credential of each profile it creates, so the capability
+      # is bounded to one segment below the path above — never the shared
+      # secret, and never the inference paths. Without it the unit fails on
+      # its first write, no bearer is ever issued, and every request through
+      # the proxy is refused for want of one.
+      path "${mount}/data/broker/tokens/+" {
+        capabilities = ["read", "create", "update"]
       }
 
       # Application key of the memory backend. Authentication, not
@@ -64,9 +72,13 @@ let
       }
 
       # Profile bearers served by this guest: the API server needs them to
-      # validate the requests the proxy routes to it.
+      # validate the requests the proxy routes to it, and the provisioning
+      # unit issues them. Creating a profile, its memory bank and its two
+      # credentials is one idempotent operation on this guest, which is what
+      # makes a hand-made profile unnecessary — and a hand-made profile is a
+      # defect that works.
       path "${mount}/data/profiles/+/bearer" {
-        capabilities = ["read"]
+        capabilities = ["read", "create", "update"]
       }
 
       # Registry token used for rate limits only. It carries no privilege.

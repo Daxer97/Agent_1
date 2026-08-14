@@ -19,6 +19,21 @@ let
   address = cfg.guests.memory.address;
 
   network = "hermes-mem";
+
+  # The project name and the SQL extension name are not the same string. The
+  # parameter carries the project, because that is what the memory backend
+  # expects in HINDSIGHT_API_VECTOR_EXTENSION; `CREATE EXTENSION` wants the
+  # name the project installs its control file under. Interpolating one where
+  # the other belongs fails at the first container start, inside the
+  # entrypoint, with a message about a missing control file that reads as a
+  # broken image rather than as a wrong parameter.
+  sqlExtensionOf = {
+    pgvector = "vector";
+    pgvectorscale = "vectorscale";
+  };
+
+  sqlExtension = sqlExtensionOf.${cfg.memory.postgres.vectorExtension}
+    or cfg.memory.postgres.vectorExtension;
 in
 {
   config = lib.mkIf (builtins.elem "memory" cfg.rolesHosted) {
@@ -101,6 +116,13 @@ in
         HINDSIGHT_API_LLM_MAX_RETRIES = toString cfg.memory.hindsight.llmRetries;
         HINDSIGHT_API_LLM_TIMEOUT = toString cfg.memory.hindsight.llmTimeout;
 
+        # Extraction and consolidation produce structured output, not
+        # deliberation. Declared rather than left unset: on the model family
+        # in use reasoning is on by default when nothing says otherwise, and
+        # its tokens are billed as output on the channel that runs at every
+        # turn — the highest-volume one in the system.
+        HINDSIGHT_API_LLM_REASONING = lib.boolToString cfg.models.reasoning.memory;
+
         # Embeddings stay local for data residency; the fusion strategy is
         # algorithmic, which keeps a CPU-bound model off the recall path.
         HINDSIGHT_API_EMBEDDINGS_PROVIDER = cfg.memory.embedding.provider;
@@ -149,7 +171,21 @@ in
     # The vector extension is created in the dedicated schema at first start.
     environment.etc."hermes/pg-init/00-extension.sql".text = ''
       CREATE SCHEMA IF NOT EXISTS ${cfg.memory.postgres.schema};
-      CREATE EXTENSION IF NOT EXISTS ${cfg.memory.postgres.vectorExtension};
+      CREATE EXTENSION IF NOT EXISTS ${sqlExtension};
+    '';
+
+    # The application-to-data path is declared as requiring TLS, and it is not
+    # encrypted: the backend is reached over plain HTTP on the addresses above,
+    # and the relational connection carries no sslmode. The parameter records a
+    # control that is not in force, which is worse than recording its absence —
+    # a reviewer reads the parameter, not the module. Stated at build time
+    # until the internal certificate material exists.
+    warnings = lib.optional cfg.memory.tlsInternal ''
+      hermes.memory.tlsInternal is true, but the application-to-data path is
+      served over plain HTTP: recall, retain and the tenant key cross the data
+      zone in clear text. Either issue internal certificates for the memory
+      backend and the relational store, or set the parameter to false so that
+      the configuration stops asserting a control it does not apply.
     '';
 
     systemd.tmpfiles.rules = [

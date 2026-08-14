@@ -370,6 +370,13 @@ in
       port = obs.metricsPort;
       retentionTime = "${toString obs.retention.observability}d";
 
+      # On the volume declared for observability data. Left at its default the
+      # metric store grows on the root volume of this guest, which also holds
+      # the secret store — and the point of the second volume is that when it
+      # fills up what is lost is observability. The option is relative to
+      # /var/lib by construction, hence the assertion below.
+      stateDir = lib.removePrefix "/var/lib/" "${obs.dataPath}/prometheus";
+
       # The collector writes the samples in; nothing is scraped from here
       # directly, so that the scrape configuration has a single home.
       extraFlags = [ "--web.enable-remote-write-receiver" ];
@@ -418,6 +425,16 @@ in
         datasources.path = yamlFormat.generate "datasources.yml" dashboardDatasources;
       };
     };
+
+    assertions = [{
+      assertion = lib.hasPrefix "/var/lib/" obs.dataPath;
+      message = ''
+        hermes.observability.dataPath must be under /var/lib: the metric
+        store is placed on it through an option that is relative to that
+        directory, and outside it the metrics would silently stay on the root
+        volume of the guest that also runs the secret store.
+      '';
+    }];
 
     systemd.tmpfiles.rules = [
       "d ${obs.dataPath} 0755 root root -"

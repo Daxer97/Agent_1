@@ -119,11 +119,14 @@
       managementCidr = "192.168.1.0/24";
 
       # Third octet equals the VLAN id; the gateway of each zone is .1, an SVI
-      # on the upstream router.
+      # on the upstream router. The gateway is a parameter and not a comment
+      # because it is the only way out of the zone: every inter-zone flow of
+      # this design — agentic plane to memory, every guest to the secret
+      # store, the collector to its scrape targets — is routed through it.
       zones = {
-        edge = { vlanId = 100; cidr = "10.100.0.0/24"; };
-        app = { vlanId = 101; cidr = "10.101.0.0/24"; };
-        data = { vlanId = 102; cidr = "10.102.0.0/24"; };
+        edge = { vlanId = 100; cidr = "10.100.0.0/24"; gateway = "10.100.0.1"; };
+        app = { vlanId = 101; cidr = "10.101.0.0/24"; gateway = "10.101.0.1"; };
+        data = { vlanId = 102; cidr = "10.102.0.0/24"; gateway = "10.102.0.1"; };
       };
 
       # The perimeter device applying the outbound policy. Restricting the
@@ -201,6 +204,11 @@
         # visible WHICH of the three backends grows. 32 GB keeps the thin
         # total on local-lvm at 108 GiB of the 136.46 available, which is the
         # reading of INC-A02 that adds up.
+        #
+        # The three backends named in the split are the three that live here.
+        # The dashboard service keeps its own state on the root volume: it is
+        # a few megabytes of panel definitions, it does not grow with traffic,
+        # and moving it would add a failure mode for nothing.
         extraDisks = [{
           sizeGb = 32;
           storage = "local-lvm";
@@ -497,8 +505,19 @@
       servicePath = "/var/lib/hermes-svc";
 
       api = {
-        # Never the wildcard address: the proxy is the only admitted path.
-        bindAddress = "127.0.0.1";
+        # DEVIATION FROM THE MATRIX. API_BIND_ADDR is confirmed as 127.0.0.1
+        # with the note "nginx reaches the API server from the container" —
+        # true of a topology where the proxy shares the guest. Here the proxy
+        # is on the ingress guest and the API server runs inside a container
+        # with a private network, so loopback is reachable from nothing at
+        # all: the proxy would get a connection refused on every turn.
+        #
+        # The container's own address on the guest-local network is the value
+        # that keeps the intent — not the wildcard, not exposed beyond the
+        # guest — and is reachable: the guest forwards its port to it, and the
+        # firewall admits that port from the ingress application interface
+        # alone.
+        bindAddress = "10.111.0.2";
         port = 8000;
         profilePrefix = "/p";
 
@@ -662,12 +681,6 @@
       # A debug level left switched on is the most frequent — and least
       # visible — cause of conversational leakage.
       logLevel = "info";
-
-      # The sample population. The identities and the groups below are the
-      # ones declared above; the password hashes are generated on the
-      # workstation with `authelia crypto hash generate argon2` and are the
-      # only thing still missing from that file.
-      usersFile = ./config/authelia/users.yml;
     };
 
     # ======================================================================
@@ -680,8 +693,23 @@
     # ======================================================================
     ingress = {
       publicFqdn = "hermes.proxlab";
-      controlPlaneFqdn = "memory.proxlab";
-      cookieDomain = "proxlab";
+
+      # DEVIATION FROM THE MATRIX, and the reason is the one RT-P-13 was
+      # raised for. The matrix pairs memory.proxlab and phoenix.proxlab with
+      # COOKIE_DOMAIN=proxlab, and a single-label cookie domain does not work:
+      # the identity provider refuses to start on a domain without a period,
+      # and a browser discards `Set-Cookie: Domain=proxlab` because an unknown
+      # single label is treated as a public suffix. The session would not be
+      # shared across the three names — exactly the failure RT-P-13 corrected
+      # on one name and left standing on the domain itself.
+      #
+      # The published name stays as confirmed. The two operator consoles move
+      # one label down, so the cookie domain has a period and covers all
+      # three. This needs the three A records of P-07 to be created under
+      # hermes.proxlab, and the matrix rows CP_FQDN, PHOENIX_FQDN and
+      # COOKIE_DOMAIN to be corrected.
+      controlPlaneFqdn = "memory.hermes.proxlab";
+      cookieDomain = "hermes.proxlab";
 
       tls = {
         # The names are not published, so the automatic protocol cannot
@@ -851,8 +879,9 @@
         # tidier configuration.
         grpcPort = 4417;
 
-        # Under the cookie domain, like the other two names (RT-P-13).
-        fqdn = "phoenix.proxlab";
+        # Under the cookie domain, like the other two names (RT-P-13, and see
+        # the note on ingress.cookieDomain).
+        fqdn = "phoenix.hermes.proxlab";
 
         workingDirectory = "/var/lib/observability/phoenix";
 

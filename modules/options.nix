@@ -49,6 +49,16 @@ let
         type = cidr;
         description = "Address range assigned to this zone.";
       };
+      gateway = mkOption {
+        type = ipv4;
+        description = ''
+          Router interface serving this zone. Routing between zones is
+          performed by the device upstream, so this address is the only way
+          out of the zone: without it a guest has a route to its own range and
+          to nothing else — not to the secret store, not to the resolver, and
+          not back to the management range it is administered from.
+        '';
+      };
     };
   };
 
@@ -655,7 +665,13 @@ in
       api = {
         bindAddress = mkOption {
           type = ipv4;
-          description = "Address the API server binds to. Never the wildcard address: the proxy is the only admitted path.";
+          description = ''
+            Address the API server binds to, inside the interactive container.
+            It is the container's own address on the guest-local network:
+            never the wildcard, and never loopback either — loopback inside a
+            container with a private network is reachable from nothing, and
+            the proxy lives on another guest.
+          '';
         };
         port = mkOption { type = types.port; default = 8000; description = "Port of the API server."; };
         profilePrefix = mkOption {
@@ -789,15 +805,6 @@ in
       };
 
       logLevel = mkOption { type = types.enum [ "trace" "debug" "info" "warn" "error" ]; default = "info"; description = "Log level of the identity provider."; };
-
-      usersFile = mkOption {
-        type = types.path;
-        description = ''
-          File backend holding the sample population. Adequate for a proof of
-          concept; a directory backend is the expected choice in service, and
-          substituting it does not touch the access rules.
-        '';
-      };
     };
 
     # -------------------------------------------------------------- ingress
@@ -1107,6 +1114,22 @@ in
   };
 
   config = {
+    # The backup parameters are a declaration and not yet a mechanism: the
+    # schedules, the encryption recipient, the mount options and the restore
+    # interval are read by nothing, and only the staging path reaches a unit.
+    # Said at build time because the failure is silent by construction — a
+    # recovery point objective is not violated when the copies stop, it is
+    # violated when somebody needs one, and the parameters read as though the
+    # jobs existed.
+    warnings = lib.optional (cfg.backup.schedules != { }) ''
+      hermes.backup.schedules declares ${toString (lib.length (lib.attrNames cfg.backup.schedules))}
+      jobs that no module turns into timers, and hermes.backup.encryption,
+      ageRecipient, restoreTestFrequency and nfs.* are read by nothing. Until
+      they are, hermes.objectives.recoveryPointObjective
+      (${cfg.objectives.recoveryPointObjective}) rests on copies that are not
+      being taken.
+    '';
+
     hermes.rolesHosted =
       [ cfg.role ]
       ++ (lib.filter
@@ -1161,6 +1184,45 @@ in
       {
         assertion = cfg.ingress.corsAllowedOrigins != "*";
         message = "The origin allow-list must enumerate the admitted origins. A wildcard is not an allow-list.";
+      }
+      {
+        assertion = lib.hasInfix "." cfg.ingress.cookieDomain;
+        message = ''
+          hermes.ingress.cookieDomain is a single label. A cookie domain
+          without a period is refused by the identity provider at startup and
+          discarded by every browser, because an unknown single label is
+          treated as a public suffix. The session would not be shared between
+          the published name and the operator consoles, which is the whole
+          reason the parameter exists.
+        '';
+      }
+      {
+        assertion = lib.all
+          (name: name == cfg.ingress.cookieDomain
+            || lib.hasSuffix ".${cfg.ingress.cookieDomain}" name)
+          [
+            cfg.ingress.publicFqdn
+            cfg.ingress.controlPlaneFqdn
+            cfg.observability.evaluation.fqdn
+          ];
+        message = ''
+          Every published name must sit under hermes.ingress.cookieDomain.
+          A name outside it is not sent the session cookie: the forward-auth
+          exchange answers with a redirect that bounces off the portal, and
+          the failure surfaces at the last phase — downstream of an ingress
+          stack that has already been validated.
+        '';
+      }
+      {
+        assertion = cfg.agent.api.bindAddress == cfg.network.containerInteractiveAddress;
+        message = ''
+          hermes.agent.api.bindAddress must be the address of the interactive
+          container. The API server runs inside a guest-local container with a
+          private network: bound to loopback it is reachable from nothing, and
+          bound to the wildcard it is reachable from more than the proxy. The
+          guest forwards its own port to this address, and the firewall admits
+          that port from the ingress application interface alone.
+        '';
       }
     ];
   };

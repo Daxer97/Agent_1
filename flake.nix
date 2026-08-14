@@ -183,12 +183,17 @@
       # the repository in any form. They are verified against the secret store
       # itself, not against the working tree.
       #
-      # It also ignores the *.example.* templates. Those files are versioned
-      # unfilled on purpose — they are what a site is copied from — so their
-      # markers are the one case where a placeholder is the correct content. A
-      # gate that reports them reports something on every run, and a gate that
-      # is always red stops being read, which is the failure mode it exists to
-      # prevent.
+      # It also ignores files whose name carries `.example.`: those are
+      # versioned unfilled on purpose — they are what a site is copied from —
+      # so their markers are the one case where a placeholder is the correct
+      # content, and reporting them says nothing about the deployment.
+      #
+      # What is left is not expected to be empty from the start. The age keys
+      # of the guests do not exist until the guests do, and the backup
+      # recipient belongs to whoever holds it. The gate stays red until they
+      # are all filled in, and that is its job: what it must not do is report
+      # something that will never be filled in, because a signal that is
+      # always red is one nobody reads.
       checks.${system} = {
         no-unresolved-placeholders =
           pkgs.runCommand "no-unresolved-placeholders" { src = ./.; } ''
@@ -201,6 +206,29 @@
             fi
             touch $out
           '';
+
+        # --- Gate: the recorded revision is the one that is built ----------
+        # hermes.agent.sourceRevision is what the trajectory files report as
+        # the version that produced them, and the flake input is what is
+        # actually built. Nothing keeps the two together on its own: updating
+        # the lock changes the code and leaves the parameter reporting the
+        # revision it replaced, so the measurement of reproducibility would be
+        # taken against a version string that no longer describes anything.
+        agent-revision-pinned =
+          let recorded = reference.hermes.agent.sourceRevision;
+          in pkgs.runCommand "agent-revision-pinned" { } (
+            if lib.hasPrefix recorded hermes-src.rev
+            then "touch $out"
+            else ''
+              echo "hermes.agent.sourceRevision is ${recorded}, but the runtime"
+              echo "input resolves to ${hermes-src.rev}."
+              echo
+              echo "Set the parameter to the locked revision, or lock the input"
+              echo "to the recorded one:"
+              echo "    nix flake lock --override-input hermes-src \\"
+              echo "        github:Daxer97/hermes-agent/${recorded}"
+              exit 1
+            '');
 
         inherit baoPolicies;
       };
