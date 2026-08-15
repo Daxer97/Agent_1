@@ -955,6 +955,22 @@ in
       };
 
       evaluation = {
+        image = mkOption {
+          type = imageRef;
+          description = ''
+            Digest-pinned image of the evaluation platform. It is carried as
+            an image because there is no package for it to be built from: the
+            platform is absent from nixpkgs, so the choice is this or vendoring
+            its dependency tree into this repository.
+
+            Resolve the digest of the tag you intend to run before setting it,
+            on the node:
+
+                skopeo inspect docker://arizephoenix/phoenix:<tag> \
+                  | jq -r .Digest
+          '';
+        };
+
         bindAddress = mkOption {
           type = ipv4;
           description = "Address the evaluation platform binds to. Neither the wildcard address nor loopback: it is reached through the proxy.";

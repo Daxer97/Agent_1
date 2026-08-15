@@ -17,7 +17,7 @@
 #     provider;
 #   * restricted permissions on the state directory, because of what it holds.
 
-{ config, lib, pkgs, ... }:
+{ config, lib, ... }:
 
 let
   cfg = config.hermes;
@@ -26,29 +26,48 @@ let
 in
 {
   config = lib.mkIf (builtins.elem "observability" cfg.rolesHosted) {
-    users.users.phoenix = {
-      isSystemUser = true;
-      group = "phoenix";
-      home = eval.workingDirectory;
+    # Delivered as a digest-pinned image, like every other third-party service
+    # on this platform — the store providing the vector index, the memory
+    # backend and the chat interface are all carried the same way. It is not
+    # in nixpkgs: there is no arize-phoenix attribute to build against, in
+    # this release or any other, so the alternative would have been to package
+    # a large dependency tree here and carry it.
+    virtualisation.podman = {
+      enable = true;
+      dockerCompat = false;
+      autoPrune.enable = true;
     };
 
-    users.groups.phoenix = { };
+    virtualisation.oci-containers.backend = "podman";
 
     # On the volume dedicated to observability data: separate from the root
     # filesystem of the guest and from the audit trail of the secret store.
+    # Root-owned and unreadable by anyone else, as the chat interface's volume
+    # is on the ingress guest: the container writes as the identity its image
+    # declares, and the directory is not shared with a guest-side account.
     systemd.tmpfiles.rules = [
-      "d ${eval.workingDirectory} 0700 phoenix phoenix -"
+      "d ${eval.workingDirectory} 0700 root root -"
     ];
 
-    systemd.services.phoenix = {
-      description = "Trace backend and evaluation platform";
-      wantedBy = [ "multi-user.target" ];
-      after = [ "network-online.target" "bao-agent-eval.service" ];
-      requires = [ "bao-agent-eval.service" ];
-      wants = [ "network-online.target" ];
+    virtualisation.oci-containers.containers.phoenix = {
+      image = eval.image;
+      autoStart = true;
+
+      # Published on the address the platform declares, and on that address
+      # only. The wildcard below is the container's own namespace, not the
+      # guest's: what is reachable on the guest is this mapping, so the
+      # binding is narrower than the unit it replaces rather than wider.
+      ports = [
+        "${eval.bindAddress}:${toString eval.port}:${toString eval.port}"
+        "${eval.bindAddress}:${toString eval.grpcPort}:${toString eval.grpcPort}"
+      ];
+
+      volumes = [ "${eval.workingDirectory}:${eval.workingDirectory}" ];
 
       environment = {
-        PHOENIX_HOST = eval.bindAddress;
+        # Inside the container's network namespace. The guest-side address is
+        # decided by the port mapping above.
+        PHOENIX_HOST = "0.0.0.0";
         PHOENIX_PORT = toString eval.port;
 
         # Deliberately not the conventional receiving port: the collector
@@ -80,26 +99,27 @@ in
         OPENAI_BASE_URL = "http://${cfg.broker.host}:${toString cfg.broker.port}/v1";
       };
 
-      serviceConfig = {
-        User = "phoenix";
-        Group = "phoenix";
-        WorkingDirectory = eval.workingDirectory;
-        EnvironmentFile = "${runtime}/phoenix.env";
-        ExecStart = "${pkgs.arize-phoenix}/bin/phoenix serve";
-        Restart = "on-failure";
-        RestartSec = "10s";
+      environmentFiles = [ "${runtime}/phoenix.env" ];
+    };
 
-        # These do not add memory. They decide which process is reclaimed
-        # first when the guest runs out of it.
+    # The container reads secrets rendered by the store agent. Without the
+    # ordering it starts, fails to find the environment file, and restarts
+    # until it appears — which works, and hides a real ordering defect.
+    #
+    # The memory guardrails stay on the unit rather than moving to the
+    # container runtime: the container's processes live in this unit's cgroup,
+    # so the ceiling still applies to them, and it stays expressed in the same
+    # place as the floor granted to the secret store below. They do not add
+    # memory. They decide which process is reclaimed first when the guest runs
+    # out of it.
+    systemd.services.podman-phoenix = {
+      after = [ "bao-agent-eval.service" ];
+      requires = [ "bao-agent-eval.service" ];
+
+      serviceConfig = {
         MemoryAccounting = true;
         MemoryHigh = eval.memoryHigh;
         MemoryMax = eval.memoryMax;
-
-        NoNewPrivileges = true;
-        PrivateTmp = true;
-        ProtectHome = true;
-        ProtectSystem = "strict";
-        ReadWritePaths = [ eval.workingDirectory ];
       };
     };
 

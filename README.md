@@ -943,6 +943,7 @@ Workloads are declared under `hermes.programmatic.workloads.<name>`.
 | `hermes.observability.instrumentation.traceSemantics` | string | Trace semantics declared by the instrumentation and expected by the trace backend. | `openinference` |
 | `hermes.observability.instrumentation.hideInputs` | boolean | Suppress prompt attributes. Suppressing them removes the evaluators' input. | `false` |
 | `hermes.observability.instrumentation.hideOutputs` | boolean | Suppress completion attributes. | `false` |
+| `hermes.observability.evaluation.image` | image reference | Digest-pinned image of the evaluation platform. It is carried as an image because it has no package in nixpkgs. Resolve the digest with `skopeo inspect docker://arizephoenix/phoenix:<tag>`. | — |
 | `hermes.observability.evaluation.bindAddress` | IPv4 | Address the evaluation platform binds to. Neither the wildcard address nor loopback: it is reached through the proxy. | — |
 | `hermes.observability.evaluation.port` | port | Port serving the evaluation console and telemetry over HTTP. | `6006` |
 | `hermes.observability.evaluation.grpcPort` | port | Port receiving telemetry over gRPC. Deliberately not the conventional one — an assertion rejects a collision with the collector. | — |

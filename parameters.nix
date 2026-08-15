@@ -881,6 +881,17 @@
       };
 
       evaluation = {
+        # The platform is not in nixpkgs, so it is carried as an image like
+        # the other third-party services. Resolve the digest of the tag you
+        # intend to run, on the node, and replace this value:
+        #
+        #     skopeo inspect docker://arizephoenix/phoenix:<tag> | jq -r .Digest
+        #
+        # It is left unresolved on purpose rather than filled with a digest
+        # nobody checked: which build of the evaluation platform holds the
+        # conversational content is not a detail to inherit by accident.
+        image = "PLACEHOLDER_PHOENIX_IMAGE@sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
         # Neither the wildcard address nor loopback: reached through the
         # proxy, which sits in another zone. Before this parameter existed the
         # service had no configuration file at all, which is what made the

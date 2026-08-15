@@ -528,6 +528,12 @@
       };
 
       evaluation = {
+        # Not in nixpkgs, so carried as an image like the other third-party
+        # services. Resolve the digest of the tag you intend to run:
+        #
+        #     skopeo inspect docker://arizephoenix/phoenix:<tag> | jq -r .Digest
+        image = "PLACEHOLDER_PHOENIX_IMAGE@sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
         # Neither the wildcard address nor loopback: reached through the proxy.
         bindAddress = "203.0.113.14";
         port = 6006;
