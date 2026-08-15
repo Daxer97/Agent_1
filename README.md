@@ -173,6 +173,7 @@ all.
 ├── modules/
 │   ├── options.nix              the parameter schema — every option, typed
 │   ├── common.nix               configuration shared by all guests
+│   ├── disk-layout.nix          root partition table and boot path, via disko
 │   ├── network-zones.nix        three-zone segmentation, default deny
 │   ├── secret-store.nix         secret store server
 │   ├── secrets-agent.nix        agent rendering policies into environment files
@@ -735,6 +736,7 @@ Declared per role under `hermes.guests.<role>`, where `<role>` is one of
 | `hermes.nix.substituters` | list of string | Binary caches consulted during a rebuild. | — |
 | `hermes.nix.buildHost` | string or null | Host performing the builds. The agentic guest denies outbound traffic and has no working local build path. | `null` |
 | `hermes.nix.provisioningMethod` | `iso` \| `nixos-anywhere` \| `template-clone` | Method used for the first installation of a guest. | `nixos-anywhere` |
+| `hermes.nix.rootDevice` | string | Block device carrying the root volume inside the guest. Follows the attachment in `pve-provision.nix` — the root volume is `scsi0`, the additional ones follow as `sdb` onwards. | `/dev/sda` |
 | `hermes.nix.sopsAgeKeyPath` | path | Private key from which the age identity is derived. Deriving it from the host key means there is no extra key to distribute. | `/etc/ssh/ssh_host_ed25519_key` |
 
 ### Secret store

@@ -9,6 +9,15 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    # The partition table of the guests, declared with the rest of their
+    # configuration rather than typed into an installer once and forgotten.
+    # This is also what nixos-anywhere applies: the documented installation
+    # path has no other source for the layout.
+    disko = {
+      url = "github:nix-community/disko";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     # --- uv2nix toolchain: reproducible builds of the Python components -----
     pyproject-nix = {
       url = "github:pyproject-nix/pyproject.nix";
@@ -49,6 +58,7 @@
     { self
     , nixpkgs
     , sops-nix
+    , disko
     , pyproject-nix
     , uv2nix
     , build-systems
@@ -158,9 +168,11 @@
       # ----------------------------------------------------------------------
       commonModules = [
         sops-nix.nixosModules.sops
+        disko.nixosModules.disko
         parameters
         ./modules/options.nix
         ./modules/common.nix
+        ./modules/disk-layout.nix
         ./modules/pve-provision.nix
         ./modules/network-zones.nix
         ./modules/secrets-agent.nix
@@ -200,6 +212,7 @@
       apps.${system}.provision-guests = {
         type = "app";
         program = "${pveProvision}/bin/hermes-provision-guests";
+        meta.description = "Create, snapshot and inspect the platform guests, from the node.";
       };
 
       nixosConfigurations = lib.listToAttrs (map

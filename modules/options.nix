@@ -382,6 +382,19 @@ in
         description = "Method used to perform the first installation of a guest.";
       };
 
+      rootDevice = mkOption {
+        type = types.str;
+        default = "/dev/sda";
+        description = ''
+          Block device carrying the root volume inside the guest. It is not a
+          free choice: the provisioning script attaches the root volume as
+          scsi0 on a virtio-scsi controller, which the guest enumerates as the
+          first SCSI disk, and the additional volumes follow it as sdb, sdc
+          and so on. Changing the attachment in pve-provision.nix without
+          changing this leaves the installer partitioning the wrong disk.
+        '';
+      };
+
       sopsAgeKeyPath = mkOption {
         type = types.path;
         default = "/etc/ssh/ssh_host_ed25519_key";
