@@ -79,6 +79,14 @@ in
         after = [ "bao-agent-hermes.service" "network-online.target" ];
         requires = [ "bao-agent-hermes.service" ];
 
+        # Ordering after network-online.target does not bring it about. On its
+        # own the ordering is satisfied the moment the target is skipped, and
+        # this unit talks to the runtime's API over the network on its first
+        # command: what it would meet then is a connection refused, on a
+        # oneshot that does not come back. The secrets agent and the broker
+        # both state the pair; this one stated half of it.
+        wants = [ "network-online.target" ];
+
         serviceConfig = {
           Type = "oneshot";
           RemainAfterExit = true;
