@@ -33,7 +33,7 @@
     # The revision itself is a parameter (hermes.agent.sourceRevision); this
     # input only fixes the repository the flake fetches it from.
     hermes-src = {
-      url = "github:Daxer97/hermes-agent";
+      url = "github:Daxer97/agent_1";
       flake = false;
     };
   };
