@@ -39,9 +39,12 @@ in
       type = "gpt";
       partitions = {
         # Where GRUB's core image goes. It holds no filesystem and is never
-        # mounted: one megabyte, before everything else on the disk.
+        # mounted: one megabyte, before everything else on the disk. The
+        # ordering is not written out here because disko already derives it —
+        # an EF02 partition is placed first and one sized 100% last — and a
+        # priority stated by hand would only be a second place for it to
+        # disagree.
         bios = {
-          priority = 1;
           size = "1M";
           type = "EF02";
         };
@@ -49,9 +52,6 @@ in
         # The remainder. Sized by hermes.guests.<role>.diskGb on the node
         # side, so the partition takes whatever the volume was created with
         # and a volume that is grown later is grown here too.
-        # disko already orders a partition declared as 100% last, so the
-        # remainder is what is left after the megabyte above and not the
-        # whole disk.
         root = {
           size = "100%";
           content = {

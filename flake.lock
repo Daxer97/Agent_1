@@ -26,14 +26,34 @@
         "type": "github"
       }
     },
+    "disko": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1781152676,
+        "narHash": "sha256-RxWs5ND31KzTG7wvMM+PMfUjyNpmIEr999lqNARaM5o=",
+        "owner": "nix-community",
+        "repo": "disko",
+        "rev": "ff8702b4de27f72b4c78573dfb89ec74e36abdf1",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "disko",
+        "type": "github"
+      }
+    },
     "hermes-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1786656134,
-        "narHash": "sha256-/qMHBkrzLcF8hdG+lgJKaG0EjBIix8yCKqtlOgvwwts=",
+        "lastModified": 1785585308,
+        "narHash": "sha256-D2dDU592s5K7xvl0j/3pHdppdI8q3PUK3StjNcizoDg=",
         "owner": "Daxer97",
         "repo": "hermes-agent",
-        "rev": "2ae96939f53b0cc0aa82868fc9a44702f3dd6c09",
+        "rev": "470cf66b039c73bdd2c21d43094ce41a4db74eae",
         "type": "github"
       },
       "original": {
@@ -81,6 +101,7 @@
     "root": {
       "inputs": {
         "build-systems": "build-systems",
+        "disko": "disko",
         "hermes-src": "hermes-src",
         "nixpkgs": "nixpkgs",
         "pyproject-nix": "pyproject-nix",
