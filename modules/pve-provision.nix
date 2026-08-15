@@ -34,30 +34,42 @@ let
         ${vlanOf guest.zone} ${toString guest.bootOrder} \
         ${guest.storage} ${guest.diskFormat} ${toString guest.bootDelay}
     ''
-    + lib.concatMapStrings
-      (interface: ''
-        # Second interface, in the ${interface.zone} zone. Only this guest is
-        # dual-homed, and the flows towards the downstream services are
-        # admitted from this interface alone.
-        qm set ${toString guest.vmid} --net1 \
+    # Indexed from one, because net0 is the primary interface created above.
+    # The index is not decoration: common.nix names the additional interfaces
+    # eth1, eth2 and so on in the order they are declared, and addresses them
+    # in that order. Attaching them all to net1 would leave every interface
+    # after the first configured on a guest and absent from the machine.
+    + lib.concatStrings (lib.imap1
+      (index: interface: ''
+        # Interface ${toString index}, in the ${interface.zone} zone. Only the
+        # dual-homed guest has one, and the flows towards the downstream
+        # services are admitted from this interface alone.
+        qm set ${toString guest.vmid} --net${toString index} \
           "virtio,bridge=${cfg.network.bridge},tag=${vlanOf interface.zone},firewall=1"
       '')
-      guest.extraInterfaces
+      guest.extraInterfaces)
     + lib.optionalString (guest.cpuLimit != null) ''
 
       # CPU ceiling: keeps a delegation fan-out from saturating the node.
       qm set ${toString guest.vmid} --cpulimit ${toString guest.cpuLimit}
     ''
-    + lib.concatMapStrings
-      (disk: ''
+    # Indexed from one for the same reason, and against the same counterpart:
+    # scsi0 is the root volume, so the additional ones are scsi1 onwards, and
+    # the guest enumerates them in that order as sdb, sdc — which is exactly
+    # the arithmetic common.nix uses to decide what to mount where. A second
+    # volume written to scsi1 would replace the first in the machine
+    # definition, and the mount it was declared for would land on the root
+    # filesystem it exists to keep off.
+    + lib.concatStrings (lib.imap1
+      (index: disk: ''
 
         # Additional volume mounted on ${disk.mountPoint}. Without it the
         # observability backends write to the root filesystem of this guest,
         # and when that fills up what is lost is not observability.
-        qm set ${toString guest.vmid} --scsi1 \
+        qm set ${toString guest.vmid} --scsi${toString index} \
           "${disk.storage}:${toString disk.sizeGb},iothread=1,discard=on,ssd=1"
       '')
-      guest.extraDisks;
+      guest.extraDisks);
 
   provisionScript = pkgs.writeShellApplication {
     name = "hermes-provision-guests";
