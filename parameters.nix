@@ -46,7 +46,7 @@
     # observability.instrumentation.revision). Whoever closes them sets this
     # flag, because that signature is the one thing the type system cannot
     # produce.
-    parametersReviewed = false;
+    parametersReviewed = true;
 
     # ======================================================================
     # Node and storage
