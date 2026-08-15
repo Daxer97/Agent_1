@@ -26,6 +26,22 @@
         "type": "github"
       }
     },
+    "hermes-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1786656134,
+        "narHash": "sha256-/qMHBkrzLcF8hdG+lgJKaG0EjBIix8yCKqtlOgvwwts=",
+        "owner": "Daxer97",
+        "repo": "hermes-agent",
+        "rev": "2ae96939f53b0cc0aa82868fc9a44702f3dd6c09",
+        "type": "github"
+      },
+      "original": {
+        "owner": "Daxer97",
+        "repo": "hermes-agent",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1767313136,
@@ -65,6 +81,7 @@
     "root": {
       "inputs": {
         "build-systems": "build-systems",
+        "hermes-src": "hermes-src",
         "nixpkgs": "nixpkgs",
         "pyproject-nix": "pyproject-nix",
         "sops-nix": "sops-nix",
