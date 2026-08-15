@@ -71,10 +71,16 @@ in
   boot.loader = {
     # Written to the disk rather than to a partition, which is what the BIOS
     # boot partition above exists to make possible.
+    #
+    # Which disk is not stated here. disko derives boot.loader.grub.devices
+    # from the table itself — declaring an EF02 partition is what says the
+    # disk is booted from — and the option is a list that merges by
+    # concatenation, so naming the device again does not agree with that
+    # definition, it appends to it. The result is the same disk twice, and
+    # grub rejects it: "You cannot have duplicated devices in mirroredBoots".
     grub = {
       enable = true;
       efiSupport = false;
-      devices = [ device ];
     };
 
     # The guests are started by the node in a fixed order with a delay between
