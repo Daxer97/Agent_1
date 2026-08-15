@@ -32,8 +32,15 @@
     # project, pinned to an immutable revision. Never a moving reference.
     # The revision itself is a parameter (hermes.agent.sourceRevision); this
     # input only fixes the repository the flake fetches it from.
+    #
+    # This is the runtime repository, not this one. agent_1 holds the
+    # declarative infrastructure; the Python workspace the agent is built
+    # from — pyproject.toml, uv.lock and the `hermes` entry point the units
+    # in modules/ invoke — lives in the fork. Pointing this input at agent_1
+    # makes the workspace unresolvable, because the infrastructure repository
+    # has no lock file at its root and never will.
     hermes-src = {
-      url = "github:Daxer97/agent_1";
+      url = "github:Daxer97/hermes-agent";
       flake = false;
     };
   };
@@ -104,9 +111,36 @@
       # ----------------------------------------------------------------------
       # Python environments
       # ----------------------------------------------------------------------
+      # A workspace root without a lock file is reported by uv2nix as a bare
+      # "uv.lock does not exist" against a store path, which names neither the
+      # environment being built nor anything an operator can act on. The two
+      # roots are unresolved for different reasons — the broker's lock is
+      # generated locally and versioned here, the runtime's travels with the
+      # pinned input — so the guard says which one it was handed.
+      requireLock = name: root:
+        if builtins.pathExists (root + "/uv.lock")
+        then root
+        else throw ''
+          The workspace of ${name} has no uv.lock at ${toString root}.
+
+          For pkgs/egress-broker the lock is generated locally and versioned
+          alongside the flake — it is not committed by this repository:
+
+              nix develop -c uv lock --directory pkgs/egress-broker
+              git add pkgs/egress-broker/uv.lock
+
+          For the agent runtime the lock travels with the hermes-src input.
+          If it is absent, that input is resolving to a repository that is not
+          the runtime fork — this one, most often. It must name the fork:
+
+              url = "github:Daxer97/hermes-agent";
+        '';
+
       mkVenv = name: root:
         let
-          workspace = uv2nix.lib.workspace.loadWorkspace { workspaceRoot = root; };
+          workspace = uv2nix.lib.workspace.loadWorkspace {
+            workspaceRoot = requireLock name root;
+          };
           overlay = workspace.mkPyprojectOverlay { sourcePreference = "wheel"; };
           base = pkgs.callPackage pyproject-nix.build.packages { inherit python; };
           pySet = base.overrideScope (lib.composeManyExtensions [
