@@ -31,12 +31,21 @@ in
 
         # TLS is mandatory. The store is not exposed in the clear even on an
         # internal network.
-        listener.tcp = [{
+        #
+        # Written the way the module types it, which is not the way the HCL
+        # documentation shows it. In HCL a listener is a repeated block keyed
+        # by its kind — listener "tcp" { ... } — so the JSON translation is a
+        # list under the kind. The NixOS option is instead an attribute set
+        # keyed by a name of one's choosing, with the kind given as `type`,
+        # and it type-checks: a list here is rejected as not being a listener,
+        # which is what "not of type `JSON value'" was reporting.
+        listener.default = {
+          type = "tcp";
           address = "0.0.0.0:${toString store.port}";
           tls_cert_file = "/var/lib/openbao/tls/cert.pem";
           tls_key_file = "/var/lib/openbao/tls/key.pem";
           tls_min_version = "tls12";
-        }];
+        };
 
         storage.file.path = "/var/lib/openbao/data";
         api_addr = "https://${store.address}:${toString store.port}";
