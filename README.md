@@ -322,11 +322,35 @@ Fill in the parameters, then let the flake generate the provisioning commands:
 
 ```sh
 $EDITOR parameters.nix                       # then set parametersReviewed = true
+
+$EDITOR .sops.yaml                           # PLACEHOLDER_AGE_KEY_ADMIN -> your key
+for h in hrm-edge hrm-app hrm-mem hrm-sec; do sops secrets/$h.yaml; done
+git add secrets/*.yaml                       # untracked is invisible to the flake
+
 nix flake check                              # fails while a placeholder survives
 
 nix run .#provision-guests -- create         # run on the node
 nix run .#provision-guests -- status
 ```
+
+The bootstrap credential files come before the check, not after it, and this is
+the one ordering in the procedure that is not obvious from the error. The
+secret store agent resolves `secrets/<host>.yaml` while the configuration is
+being evaluated, not while it is being activated, so a guest whose file is
+absent stops the evaluation of every output — long before the placeholder gate
+that this phase is nominally waiting on gets the chance to report anything.
+
+Two failures are worth telling apart, because they read almost alike:
+
+| What is reported | What it means |
+| --- | --- |
+| `Path 'secrets/<host>.yaml' does not exist in Git repository` | The file has not been created. |
+| `getting status of '/nix/store/...-source/secrets/<host>.yaml'` | It exists in the working tree but was never `git add`ed. A flake is evaluated from the tracked tree; an untracked file is not there as far as the evaluation is concerned. |
+
+At this point the files can only be encrypted to the operator's own key: the
+guests do not exist yet, so neither do their host keys. That is expected, and
+the second half of this phase registers them and re-encrypts with
+`sops updatekeys`.
 
 Four guests are created, not five: the observability role is aliased onto the
 secret store guest. The start order is a property of each machine, not a note

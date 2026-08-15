@@ -46,7 +46,17 @@ authelia:
 
 ```sh
 sops secrets/<host>.yaml
+git add secrets/<host>.yaml
 ```
+
+The second command is not tidiness. A flake is evaluated from the tracked tree,
+so a file that exists here and was never added is not there as far as the
+evaluation is concerned — and because these files are read while the
+configuration is evaluated rather than while it is activated, the result is not
+a guest that fails to start but a repository that does not evaluate at all.
+
+One file per guest is required before `nix flake check` reports anything else,
+including the placeholder gate.
 
 The encryption rules are in `.sops.yaml` at the root of the repository. Verify,
 from the guest itself rather than from the workstation, that it can decrypt its
