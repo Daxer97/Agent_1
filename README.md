@@ -320,11 +320,28 @@ An authentication error from the gateway is a pass: it proves reachability.
 
 Fill in the parameters, then let the flake generate the provisioning commands:
 
-```sh
-$EDITOR parameters.nix                       # then set parametersReviewed = true
+`sops`, `age` and `ssh-to-age` are not expected to be installed: they are what
+the development shell is for, and every command below that uses one has to run
+inside it.
 
-$EDITOR .sops.yaml                           # PLACEHOLDER_AGE_KEY_ADMIN -> your key
-for h in hrm-edge hrm-app hrm-mem hrm-sec; do sops secrets/$h.yaml; done
+```sh
+nix develop                                  # sops, age, ssh-to-age on PATH
+
+mkdir -p ~/.config/sops/age                  # age-keygen does not create it
+age-keygen -o ~/.config/sops/age/keys.txt    # once, if you hold no key yet
+ADMIN=$(age-keygen -y ~/.config/sops/age/keys.txt)
+
+"${EDITOR:-vi}" parameters.nix               # then set parametersReviewed = true
+"${EDITOR:-vi}" .sops.yaml                   # admin marker -> "$ADMIN"
+
+# One file per guest, encrypted to the operator alone. The shape is in
+# secrets/README.md. --config is what makes this possible today: the rules in
+# .sops.yaml name host keys that do not exist yet, and sops refuses to encrypt
+# for a recipient it cannot parse.
+for h in hrm-edge hrm-app hrm-mem hrm-sec; do
+  "${EDITOR:-vi}" secrets/$h.yaml
+  sops --config /dev/null --age "$ADMIN" --encrypt --in-place secrets/$h.yaml
+done
 git add secrets/*.yaml                       # untracked is invisible to the flake
 
 nix flake check                              # fails while a placeholder survives
@@ -340,12 +357,20 @@ being evaluated, not while it is being activated, so a guest whose file is
 absent stops the evaluation of every output — long before the placeholder gate
 that this phase is nominally waiting on gets the chance to report anything.
 
-Two failures are worth telling apart, because they read almost alike:
+The guests themselves are not blocked by any of this. `provision-guests` is
+built from the parameters and not from a guest's activation, so it evaluates
+with no credential files present at all: if the ordering above is inconvenient,
+create the guests first and come back to the check.
+
+Four failures in this phase are worth telling apart, because each one names
+something other than what is actually missing:
 
 | What is reported | What it means |
 | --- | --- |
 | `Path 'secrets/<host>.yaml' does not exist in Git repository` | The file has not been created. |
 | `getting status of '/nix/store/...-source/secrets/<host>.yaml'` | It exists in the working tree but was never `git add`ed. A flake is evaluated from the tracked tree; an untracked file is not there as far as the evaluation is concerned. |
+| `age-keygen: error: failed to open output file` | The directory above the key does not exist. `age-keygen` writes a file, it does not build a path. |
+| `failed to parse input, unknown recipient type: "<an age-key marker>"` | sops read `.sops.yaml` and found a marker where a recipient belongs. It is reported for whichever marker it meets first, so filling in only the administrator's does not resolve it — the rule for each guest names that guest's key too. This is what `--config /dev/null` above steps around, and why it is there. |
 
 At this point the files can only be encrypted to the operator's own key: the
 guests do not exist yet, so neither do their host keys. That is expected, and
@@ -362,10 +387,12 @@ reference in the flake and in every management command.
 
 Install NixOS and register the host keys for decryption:
 
+Inside the development shell again, for `ssh-to-age` and `sops`:
+
 ```sh
 nixos-anywhere --flake .#<host> root@<address>
 ssh <address> "cat /etc/ssh/ssh_host_ed25519_key.pub" | ssh-to-age
-$EDITOR .sops.yaml                           # register the key
+"${EDITOR:-vi}" .sops.yaml                   # register the key
 sops updatekeys secrets/<host>.yaml
 ssh <address> "sops -d /etc/nixos/secrets/<host>.yaml >/dev/null && echo OK"
 ```

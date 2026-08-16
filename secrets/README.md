@@ -45,9 +45,19 @@ authelia:
 ## Creating a file
 
 ```sh
-sops secrets/<host>.yaml
+nix develop                      # sops is here, not on the system
+"${EDITOR:-vi}" secrets/<host>.yaml
+sops --config /dev/null --age "$ADMIN" --encrypt --in-place secrets/<host>.yaml
 git add secrets/<host>.yaml
 ```
+
+`--config /dev/null` applies until the guests exist. The rules in `.sops.yaml`
+name each guest's key alongside the administrator's, and sops will not encrypt
+for a recipient it cannot parse, so while those are still markers every
+creation through the rules fails — including for the guests whose key is not
+the one it happens to report. Encrypting to the administrator alone is enough
+to make the file exist, which is all the evaluation needs; `sops updatekeys`
+adds the guest once its key is real, and it reads `.sops.yaml` normally.
 
 The second command is not tidiness. A flake is evaluated from the tracked tree,
 so a file that exists here and was never added is not there as far as the
