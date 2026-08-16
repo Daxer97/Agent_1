@@ -218,6 +218,11 @@ let
       install_guest ${toString guest.vmid} ${guest.hostName} ${guest.address}
     '';
 
+  credentialCheck = role:
+    ''
+      check_credentials ${cfg.guests.${role}.hostName}
+    '';
+
   # The counterpart of createGuest: every field it sets, read back and
   # compared. The comparison is written against what qm config reports rather
   # than against the command line that produced it — Proxmox normalises both
@@ -999,6 +1004,44 @@ let
           "root@$address"
       }
 
+      # The bootstrap credential is read while a guest's configuration is
+      # evaluated, not while it is activated. An empty or unencrypted file
+      # therefore fails at the end of an installation — when sops-install-
+      # secrets builds the manifest, after the guest has been reached, its
+      # facts gathered and its closure built — and it fails once per guest,
+      # in start order, for as long as it takes to notice that the same thing
+      # is wrong with all four.
+      CREDENTIALS_EXPLAINED=0
+
+      check_credentials() {
+        local host="$1"
+        local file="$FLAKE/secrets/$host.yaml"
+
+        if [ ! -s "$file" ]; then
+          problem "secrets/$host.yaml is empty or absent."
+          # Said once. The four files are written in one sitting and are
+          # empty for one reason, and four copies of the explanation bury
+          # the four names that matter.
+          if [ "$CREDENTIALS_EXPLAINED" -eq 0 ]; then
+            note "One file per guest holds the credential it proves its identity"
+            note "with, and the configuration does not evaluate without it. The"
+            note "shape is in secrets/README.md; the values are issued in F-03,"
+            note "so the file is created before them and filled after."
+            CREDENTIALS_EXPLAINED=1
+          fi
+          return 0
+        fi
+
+        # sops leaves its own metadata block in a file it has encrypted. A
+        # file without it is either plain text — a credential in the clear,
+        # about to be copied into the store — or not a sops file at all.
+        if ! grep -q '^sops:' "$file"; then
+          problem "secrets/$host.yaml is not encrypted."
+          note "    sops --config /dev/null --age \"\$ADMIN\" --encrypt --in-place secrets/$host.yaml"
+          return 0
+        fi
+      }
+
       # In start order, and stopping at the first failure: a guest installed
       # before the secret store is a guest whose services start without their
       # credentials.
@@ -1016,6 +1059,17 @@ let
           echo "No flake at '$FLAKE'. Run this from the repository, or set" >&2
           echo "FLAKE to where it is." >&2
           exit 2
+        fi
+
+        # Every guest's credential file, before the first guest is touched.
+        # Checked here rather than one at a time because they are written in
+        # one sitting and are wrong in the same way.
+        if [ -d "$FLAKE/secrets" ]; then
+          PROBLEMS=0
+          ${lib.concatStrings (map credentialCheck byBootOrder)}
+          if [ "$PROBLEMS" -gt 0 ]; then
+            return 1
+          fi
         fi
 
         ${lib.concatStrings (map installGuest byBootOrder)}
