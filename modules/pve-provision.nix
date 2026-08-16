@@ -8,19 +8,31 @@
 # The script is meant to run on the Proxmox node. It is generated here so that
 # it cannot drift from the declaration.
 #
-# Two properties matter as much as the commands themselves, and both exist
-# because the node holds state the flake cannot see:
+# Three properties matter as much as the commands themselves, and all three
+# exist because the node holds state the flake cannot see:
 #
-#   * `create` refuses to start until every pool the inventory names is
-#     present, active and accepting disk images. A storage identifier that
-#     the node does not know is not a defect of the guest that first refers
-#     to it — it stops that guest and every guest after it, in the middle of
-#     a run that has already written to the node.
+#   * `create` refuses to start until the node matches what the inventory
+#     assumes: the pools it names, the bridge it attaches to, the capacity it
+#     was sized against. A storage identifier the node does not know is not a
+#     defect of the guest that first refers to it — it stops that guest and
+#     every guest after it, in the middle of a run that has already written.
 #
 #   * `create` is resumable. A guest that already exists is left untouched,
 #     so a run interrupted halfway is finished by running it again rather
 #     than by destroying what it managed to create. Re-issuing `qm set` for
 #     an existing volume would allocate a second one and orphan the first.
+#
+#   * What already exists is verified rather than assumed. Skipping an
+#     existing guest is only safe if something checks that it is the guest
+#     the inventory describes, so `verify` compares each one field by field —
+#     otherwise a guest created by hand, or by an earlier version of these
+#     parameters, is silently accepted as correct for the rest of the
+#     installation.
+#
+# The environment checks the README lists under F-01 are made here as well,
+# and that is deliberate. A measurement carried by hand into a parameter is
+# true when it is taken; these are the assertions that keep it true at the
+# moment the node is written to.
 
 { config, lib, pkgs, ... }:
 
@@ -36,6 +48,22 @@ let
     activeRoles;
 
   vlanOf = zone: toString cfg.network.zones.${zone}.vlanId;
+
+  # Every volume the inventory declares, root and additional alike, so that
+  # what a pool is asked to hold can be compared with what it has.
+  volumes = lib.concatMap
+    (role:
+      let guest = cfg.guests.${role}; in
+      [{ inherit (guest) storage; sizeGb = guest.diskGb; }]
+      ++ map (disk: { inherit (disk) storage sizeGb; }) guest.extraDisks)
+    byBootOrder;
+
+  storageIds = lib.unique (map (volume: volume.storage) volumes);
+
+  spaceOn = store: lib.foldl'
+    (total: volume: total + (if volume.storage == store then volume.sizeGb else 0))
+    0
+    volumes;
 
   # Every pool the inventory refers to, paired with the format the volume is
   # created in. The root volume carries an explicit format; the additional
@@ -57,11 +85,29 @@ let
         guest.extraDisks)
     byBootOrder;
 
+  # The pool of the memory guest is held to the stronger rule: the design
+  # rests on it being a device of its own, and a directory pool whose device
+  # is not mounted is indistinguishable from one that is until the disk it
+  # was meant to keep off fills up.
+  poolChecks = lib.concatMapStrings
+    (store: ''
+      check_pool ${store} ${if store == cfg.site.storage.memory then "1" else "0"}
+      check_space ${store} ${toString (spaceOn store)}
+    '')
+    storageIds;
+
   vmidChecks = lib.concatMapStrings
     (role: ''
       check_vmid ${toString cfg.guests.${role}.vmid} ${cfg.guests.${role}.hostName}
     '')
     byBootOrder;
+
+  # What the node was sized against, in the two units the sizing is written
+  # in. Memory is the binding constraint of this deployment and the figure is
+  # meaningless without the one the node reports at the time of provisioning.
+  totalCores = lib.foldl' (n: role: n + cfg.guests.${role}.cores) 0 byBootOrder;
+  maxGuestCores = lib.foldl' (n: role: lib.max n cfg.guests.${role}.cores) 0 byBootOrder;
+  totalMemoryMb = lib.foldl' (n: role: n + cfg.guests.${role}.memoryMb) 0 byBootOrder;
 
   createGuest = role:
     let
@@ -123,6 +169,55 @@ let
       fi
     '';
 
+  # The counterpart of createGuest: every field it sets, read back and
+  # compared. The comparison is written against what qm config reports rather
+  # than against the command line that produced it — Proxmox normalises both
+  # the volume identifiers and the numbers, so an equality test on the
+  # arguments would report differences that are not there.
+  verifyGuest = role:
+    let
+      guest = cfg.guests.${role};
+      id = toString guest.vmid;
+      who = "${id} ${guest.hostName}";
+    in
+    ''
+
+      # --- ${guest.hostName} ---
+      if vm_exists ${id}; then
+        load_guest ${id}
+        expect "${who}" name '${guest.hostName}'
+        expect "${who}" cores '${toString guest.cores}'
+        expect "${who}" memory '${toString guest.memoryMb}'
+        expect "${who}" balloon '0'
+        expect "${who}" onboot '1'
+        expect "${who}" protection '1'
+        expect "${who}" startup 'order=${toString guest.bootOrder},up=${toString guest.bootDelay}'
+        expect_agent "${who}"
+        expect_field "${who}" net0 bridge '${cfg.network.bridge}'
+        expect_field "${who}" net0 tag '${vlanOf guest.zone}'
+        expect_field "${who}" net0 firewall '1'
+        expect_volume "${who}" scsi0 '${guest.storage}' '${toString guest.diskGb}' '${guest.diskFormat}'
+    ''
+    + lib.concatStrings (lib.imap1
+      (index: interface: ''
+        expect_field "${who}" net${toString index} bridge '${cfg.network.bridge}'
+        expect_field "${who}" net${toString index} tag '${vlanOf interface.zone}'
+      '')
+      guest.extraInterfaces)
+    + lib.optionalString (guest.cpuLimit != null) ''
+      expect_number "${who}" cpulimit '${toString guest.cpuLimit}'
+    ''
+    + lib.concatStrings (lib.imap1
+      (index: disk: ''
+        expect_volume "${who}" scsi${toString index} '${disk.storage}' '${toString disk.sizeGb}' '-'
+      '')
+      guest.extraDisks)
+    + ''
+      else
+        note "${who}: not created."
+      fi
+    '';
+
   provisionScript = pkgs.writeShellApplication {
     name = "hermes-provision-guests";
 
@@ -140,26 +235,56 @@ let
       Usage:
         hermes-provision-guests preflight         check the node, create nothing
         hermes-provision-guests create            create the guests that do not exist yet
+        hermes-provision-guests verify            compare the guests with the inventory
+        hermes-provision-guests fsync             measure the fsync rate of the memory pool
         hermes-provision-guests snapshot <label>  snapshot every guest
         hermes-provision-guests status            list the guests and their start order
 
       create runs preflight first and stops on its findings, before the node
-      has been written to. Guests that already exist are left untouched, so an
-      interrupted run is finished by running create again.
+      has been written to. Guests that already exist are left untouched and
+      compared with the inventory instead, so an interrupted run is finished
+      by running create again.
+
+      fsync is separate because it writes to the pool and takes seconds; the
+      rest read the node and nothing else.
       USAGE
       }
 
       VMIDS=(${lib.concatMapStringsSep " " (role: toString cfg.guests.${role}.vmid) byBootOrder})
 
-      PROBLEMS=0
+      BRIDGE="${cfg.network.bridge}"
+      MEMORY_POOL="${cfg.site.storage.memory}"
+      BACKUP_TARGET="${cfg.site.backupTarget}"
+      BACKUP_MOUNT="${cfg.site.backupMountPoint}"
+      FSYNC_MINIMUM=${toString cfg.site.storage.fsyncMinimum}
+      TOTAL_CORES=${toString totalCores}
+      MAX_GUEST_CORES=${toString maxGuestCores}
+      TOTAL_MEMORY_MB=${toString totalMemoryMb}
 
+      PROBLEMS=0
+      DRIFT=0
+
+      # A problem stops the run: the node does not admit what the inventory
+      # declares, and going on writes something other than what was declared.
+      # A warning does not: it is a statement about the node that the operator
+      # is the one placed to judge, and stopping on it would make the tool the
+      # authority on a decision that is not its own.
       problem() {
-        printf 'error: %s\n' "$1" >&2
+        printf 'error:   %s\n' "$1" >&2
         PROBLEMS=$((PROBLEMS + 1))
       }
 
+      warn() {
+        printf 'warning: %s\n' "$1" >&2
+      }
+
       note() {
-        printf '       %s\n' "$1" >&2
+        printf '         %s\n' "$1" >&2
+      }
+
+      drift() {
+        printf 'drift:   %s\n' "$1" >&2
+        DRIFT=$((DRIFT + 1))
       }
 
       # --- What the node actually holds -----------------------------------
@@ -177,18 +302,35 @@ let
       # being visible.
       STORAGE_SEEN=""
 
+      NODE_READ=0
+
       read_node() {
+        if [ "$NODE_READ" -eq 1 ]; then
+          return 0
+        fi
+
         if ! command -v qm >/dev/null 2>&1 || ! command -v pvesm >/dev/null 2>&1; then
           echo "qm and pvesm are not on PATH: this command runs on the Proxmox node." >&2
           exit 2
         fi
 
-        STORAGE_ALL=$(pvesm status 2>/dev/null | awk 'NR > 1 { print $1 "\t" $2 "\t" $3 }')
+        STORAGE_ALL=$(pvesm status 2>/dev/null | awk 'NR > 1 { print $1 "\t" $2 "\t" $3 "\t" $6 }')
         STORAGE_IMAGES=$(pvesm status --content images 2>/dev/null | awk 'NR > 1 { print $1 }')
+        NODE_READ=1
       }
 
       storage_field() {
         printf '%s\n' "$STORAGE_ALL" | awk -F '\t' -v name="$1" -v col="$2" '$1 == name { print $col }'
+      }
+
+      # A property as declared, which is not the same question as what pvesm
+      # reports: the path of a pool and whether it is required to be a mount
+      # point exist only in the configuration file.
+      storage_option() {
+        awk -v want="$1" -v key="$2" '
+          /^[a-z]+: / { section = $2; next }
+          section == want && $1 == key { $1 = ""; sub(/^[ \t]+/, ""); print; exit }
+        ' /etc/pve/storage.cfg 2>/dev/null
       }
 
       vm_exists() {
@@ -197,6 +339,22 @@ let
 
       vm_name() {
         qm config "$1" 2>/dev/null | sed -n 's/^name: *//p'
+      }
+
+      # The configuration of the guest being verified, read once. Reading it
+      # per field would run qm a dozen times per guest and, worse, would
+      # compare fields that were not read at the same moment: a guest edited
+      # between two of the reads would be reported as consistent with neither
+      # state.
+      GUEST_CONF=""
+
+      load_guest() {
+        GUEST_CONF=$(qm config "$1" 2>/dev/null || true)
+      }
+
+      cfg_value() {
+        printf '%s\n' "$GUEST_CONF" |
+          awk -v key="$1:" '$1 == key { sub(/^[^ ]+ +/, ""); print; exit }'
       }
 
       check_storage() {
@@ -272,6 +430,74 @@ let
         esac
       }
 
+      # Where a directory-backed pool actually writes. The identifier says
+      # nothing about the device: a pool whose filesystem is not mounted is a
+      # directory on the root filesystem, it accepts every write, and the
+      # separation the sizing rests on is gone without a single error being
+      # reported. The memory guest is held to it strictly — a vector index
+      # sharing a spindle with everything else produces a retrieval failure
+      # that gets blamed on the memory backend.
+      check_pool() {
+        local store="$1" strict="$2"
+        local path source root_source
+
+        path=$(storage_option "$store" path)
+        if [ -z "$path" ]; then
+          return 0
+        fi
+
+        if [ ! -d "$path" ]; then
+          problem "storage '$store' points at $path, which is not a directory on this node."
+          return 0
+        fi
+
+        if ! command -v findmnt >/dev/null 2>&1; then
+          return 0
+        fi
+
+        source=$(findmnt -n -o SOURCE --target "$path" 2>/dev/null || true)
+        root_source=$(findmnt -n -o SOURCE --target / 2>/dev/null || true)
+
+        if [ -n "$source" ] && [ "$source" = "$root_source" ]; then
+          if [ "$strict" = "1" ]; then
+            problem "storage '$store' resolves to $source, which is the root filesystem."
+            note "$path is not a mount point, so its device is either absent or"
+            note "not mounted. This pool is declared as a device of its own, and"
+            note "everything written to it now lands on the node's root disk."
+          else
+            warn "storage '$store' resolves to $source, the root filesystem."
+          fi
+          return 0
+        fi
+
+        # Mounted today is not the same as mounted after a reboot. Without
+        # is_mountpoint, Proxmox recreates the directory on whatever is
+        # underneath and carries on writing there.
+        if [ "$(storage_option "$store" is_mountpoint)" != "1" ]; then
+          warn "storage '$store' is on $source but is not declared is_mountpoint."
+          note "After a boot where that device does not come up, Proxmox writes"
+          note "to $path on the root filesystem instead, and reports nothing."
+          note "    pvesm set $store --is_mountpoint 1"
+        fi
+      }
+
+      check_space() {
+        local store="$1" want_gb="$2"
+        local available_kb want_kb
+
+        available_kb=$(storage_field "$store" 4)
+        if [ -z "$available_kb" ]; then
+          return 0
+        fi
+
+        want_kb=$((want_gb * 1024 * 1024))
+        if [ "$available_kb" -lt "$want_kb" ]; then
+          warn "storage '$store' has $((available_kb / 1048576)) GiB free and the inventory declares $want_gb GiB on it."
+          note "Thin pools accept the allocation and fail later, when the"
+          note "volumes are written rather than when they are created."
+        fi
+      }
+
       check_vmid() {
         local id="$1" name="$2" existing
 
@@ -293,13 +519,102 @@ let
         fi
       }
 
+      # qm create accepts a bridge that is not there. The guest is created,
+      # it starts, and it comes up with an interface attached to nothing —
+      # which is diagnosed as a guest network problem, one layer above where
+      # it actually is.
+      check_bridge() {
+        local filtering
+
+        if [ ! -d "/sys/class/net/$BRIDGE" ]; then
+          problem "bridge '$BRIDGE' does not exist on this node."
+          note "It is not validated by qm create: the guests would be created"
+          note "attached to a bridge that is not there."
+          return 0
+        fi
+
+        filtering="/sys/class/net/$BRIDGE/bridge/vlan_filtering"
+        if [ ! -e "$filtering" ]; then
+          warn "'$BRIDGE' is not a Linux bridge, or exposes no VLAN filtering flag."
+          return 0
+        fi
+
+        if [ "$(cat "$filtering")" != "1" ]; then
+          warn "VLAN filtering is off on '$BRIDGE'."
+          note "The three zones of this design are separated by VLAN tags on"
+          note "this bridge. Without filtering the tags are carried by the"
+          note "traditional per-VLAN interfaces, if they exist at all, and the"
+          note "segmentation stops being a property of the bridge."
+          note "    cat /sys/class/net/$BRIDGE/bridge/vlan_filtering   # expected: 1"
+        fi
+      }
+
+      # The two figures the sizing was taken against. Proxmox refuses to start
+      # a guest with more virtual CPUs than the node has, and memory is the
+      # binding constraint of this deployment: neither is visible from the
+      # flake, and both change under the operator's feet.
+      check_capacity() {
+        local cpus available_mb
+
+        cpus=$(nproc)
+        if [ "$MAX_GUEST_CORES" -gt "$cpus" ]; then
+          problem "a guest is declared with $MAX_GUEST_CORES cores and the node has $cpus."
+          note "Proxmox refuses to start a guest whose virtual CPU count"
+          note "exceeds the CPUs of the node. It is created and never boots."
+        fi
+
+        available_mb=$(awk '/^MemAvailable:/ { print int($2 / 1024) }' /proc/meminfo)
+        if [ -z "$available_mb" ]; then
+          return 0
+        fi
+
+        if [ "$TOTAL_MEMORY_MB" -gt "$available_mb" ]; then
+          warn "the guests are assigned $TOTAL_MEMORY_MB MB and the node has $available_mb MB available."
+          note "Ballooning is disabled by design, so the assignment is fixed:"
+          note "the guests cannot give any of it back under pressure."
+        else
+          note "capacity: $TOTAL_CORES vCPU on $cpus, $TOTAL_MEMORY_MB MB of $available_mb MB available, $((available_mb - TOTAL_MEMORY_MB)) MB left to the host."
+        fi
+      }
+
+      # Not needed to create a guest, and reported rather than enforced for
+      # that reason. It is the first of the three checks the backup phase
+      # rests on, and it is cheaper to learn now than at the phase that
+      # depends on it.
+      check_backup_target() {
+        if [ -z "$(storage_field "$BACKUP_TARGET" 2)" ]; then
+          warn "backup target '$BACKUP_TARGET' is not declared on this node."
+          return 0
+        fi
+
+        if [ "$(storage_field "$BACKUP_TARGET" 3)" != "active" ]; then
+          warn "backup target '$BACKUP_TARGET' is declared but not active."
+          return 0
+        fi
+
+        case ",$(storage_option "$BACKUP_TARGET" content)," in
+          *,backup,*) ;;
+          *) warn "backup target '$BACKUP_TARGET' does not carry content=backup." ;;
+        esac
+
+        if [ ! -d "$BACKUP_MOUNT" ]; then
+          warn "the backup mount point $BACKUP_MOUNT does not exist on this node."
+          note "The identifier of a pool and the path it is mounted on are two"
+          note "different things, and with NFS the two diverge."
+        fi
+      }
+
       cmd_preflight() {
         read_node
         PROBLEMS=0
         STORAGE_SEEN=""
 
         ${storageChecks}
+        ${poolChecks}
         ${vmidChecks}
+        check_bridge
+        check_capacity
+        check_backup_target
 
         if [ "$PROBLEMS" -gt 0 ]; then
           local word="problems"
@@ -310,7 +625,102 @@ let
           return 1
         fi
 
-        echo "Preflight: every pool the inventory names is present, active and takes images."
+        echo "Preflight: the node admits every pool, bridge and VMID the inventory names."
+      }
+
+      # --- Reading a guest back -------------------------------------------
+      expect() {
+        local who="$1" key="$2" want="$3" have
+        have=$(cfg_value "$key")
+        if [ "$have" != "$want" ]; then
+          drift "$who: $key is '$have' on the node, '$want' is declared."
+        fi
+      }
+
+      # Proxmox prints what it stores, and it stores numbers in a form of its
+      # own: a limit set as 3.500000 comes back as 3.5. Comparing the two as
+      # strings reports a difference that does not exist, and printing the
+      # declared value unrounded reports a real one in a form nobody wrote.
+      expect_number() {
+        local who="$1" key="$2" want="$3" have shown
+        have=$(cfg_value "$key")
+        if ! awk -v a="$have" -v b="$want" 'BEGIN { exit !(a + 0 == b + 0) }'; then
+          shown=$(awk -v b="$want" 'BEGIN { printf "%g", b + 0 }')
+          drift "$who: $key is '$have' on the node, '$shown' is declared."
+        fi
+      }
+
+      # enabled=1 is stored either as itself or as a bare 1, depending on the
+      # version. Both mean the agent is enabled, which is what is declared.
+      expect_agent() {
+        local who="$1" have
+        have=$(cfg_value agent)
+        case "$have" in
+          1 | 1,* | enabled=1 | enabled=1,*) ;;
+          *) drift "$who: agent is '$have' on the node, enabled is declared." ;;
+        esac
+      }
+
+      expect_field() {
+        local who="$1" key="$2" field="$3" want="$4" have
+        have=$(cfg_value "$key" | tr ',' '\n' | sed -n "s/^$field=//p")
+        if [ "$have" != "$want" ]; then
+          drift "$who: $key $field is '$have' on the node, '$want' is declared."
+        fi
+      }
+
+      # The volume identifier is assigned by Proxmox and carries no
+      # information the inventory could predict — what it does carry is the
+      # pool it was allocated on, the size, and, on a directory pool, the
+      # format as the extension of the file.
+      expect_volume() {
+        local who="$1" key="$2" store="$3" size="$4" fmt="$5"
+        local line volume have_store have_size
+
+        line=$(cfg_value "$key")
+        if [ -z "$line" ]; then
+          drift "$who: $key is absent on the node, a ''${size}G volume on '$store' is declared."
+          return 0
+        fi
+
+        volume="''${line%%,*}"
+        have_store="''${volume%%:*}"
+        have_size=$(printf '%s' "$line" | tr ',' '\n' | sed -n 's/^size=//p')
+
+        if [ "$have_store" != "$store" ]; then
+          drift "$who: $key is on '$have_store', '$store' is declared."
+        fi
+
+        if [ "$have_size" != "''${size}G" ]; then
+          drift "$who: $key is $have_size on the node, ''${size}G is declared."
+        fi
+
+        if [ "$fmt" = "qcow2" ]; then
+          case "$volume" in
+            *.qcow2) ;;
+            *) drift "$who: $key is '$volume', which is not a qcow2 volume." ;;
+          esac
+        fi
+      }
+
+      cmd_verify() {
+        read_node
+        DRIFT=0
+
+        ${lib.concatStringsSep "\n" (map verifyGuest byBootOrder)}
+
+        if [ "$DRIFT" -gt 0 ]; then
+          local word="differences"
+          if [ "$DRIFT" -eq 1 ]; then
+            word="difference"
+          fi
+          printf '\n%s %s between the node and the inventory.\n' "$DRIFT" "$word" >&2
+          echo "A guest is not corrected in place: qm set what belongs to a" >&2
+          echo "stopped guest, or destroy it and let create build it again." >&2
+          return 1
+        fi
+
+        echo "Verify: every guest on the node matches the inventory."
       }
 
       create_guest() {
@@ -329,14 +739,57 @@ let
       }
 
       cmd_create() {
-        # The gate is the point: a pool missing from the node stops the run
-        # here, with nothing allocated, rather than after the guests before it
-        # in the start order have already been written.
+        # The gate is the point: a node that does not admit what the inventory
+        # declares stops the run here, with nothing allocated, rather than
+        # after the guests before it in the start order have been written.
         cmd_preflight
         echo
         ${lib.concatStringsSep "\n" (map createGuest byBootOrder)}
 
+        # What was skipped is not what was verified. A guest left untouched
+        # because it exists is compared against the declaration here, so that
+        # 'already present' is a statement about its contents and not only
+        # about its VMID.
+        echo
+        cmd_verify || true
+
         qm list
+      }
+
+      cmd_fsync() {
+        read_node
+
+        local path rate
+
+        if ! command -v pveperf >/dev/null 2>&1; then
+          echo "pveperf is not on PATH: this command runs on the Proxmox node." >&2
+          exit 2
+        fi
+
+        path=$(storage_option "$MEMORY_POOL" path)
+        if [ -z "$path" ]; then
+          echo "Storage '$MEMORY_POOL' is not directory-backed, and pveperf" >&2
+          echo "measures a path. Measure the device it is built on instead." >&2
+          exit 2
+        fi
+
+        echo "Measuring $path — pveperf writes a temporary file there."
+        rate=$(pveperf "$path" | awk -F: '/FSYNCS\/SECOND/ { gsub(/[ \t]/, "", $2); print $2 }')
+
+        if [ -z "$rate" ]; then
+          echo "pveperf reported no fsync rate for $path." >&2
+          exit 1
+        fi
+
+        if [ "''${rate%%.*}" -lt "$FSYNC_MINIMUM" ]; then
+          echo "$rate fsync/s on '$MEMORY_POOL', below the declared floor of $FSYNC_MINIMUM." >&2
+          echo "Revise the sizing now: below the floor this is diagnosed later" >&2
+          echo "as a retrieval failure of the memory backend rather than as a" >&2
+          echo "property of the disk underneath it." >&2
+          exit 1
+        fi
+
+        echo "$rate fsync/s on '$MEMORY_POOL', against a declared floor of $FSYNC_MINIMUM."
       }
 
       cmd_snapshot() {
@@ -383,6 +836,8 @@ let
       case "''${1:-}" in
         preflight) cmd_preflight ;;
         create)    cmd_create ;;
+        verify)    cmd_verify ;;
+        fsync)     cmd_fsync ;;
         snapshot)  shift; cmd_snapshot "''${1:-}" ;;
         status)    cmd_status ;;
         *)         usage; exit 2 ;;

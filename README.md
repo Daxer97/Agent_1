@@ -305,6 +305,18 @@ qm list ; pct list                              # VMIDs already in use
 Record the results and carry them into `parameters.nix`. The fsync rate on the
 pool destined for the memory guest must clear the declared floor; if it does
 not, revise the sizing now rather than diagnosing a retrieval failure later.
+Once the parameters are filled in, that measurement is also a command:
+
+```sh
+nix run .#provision-guests -- fsync          # pveperf on the memory pool, against the declared floor
+```
+
+Most of the list above is re-asserted by `preflight` in F-02, against the
+parameters rather than against a reading. That is deliberate and it is not
+redundant: a value carried by hand into a parameter is true when it is taken,
+and these are the assertions that keep it true at the moment the node is
+written to. What `preflight` cannot replace is this phase's judgement — the
+figures recorded here are what the sizing was *decided* from.
 
 Confirm egress:
 
@@ -348,15 +360,38 @@ nix flake check                              # fails while a placeholder survive
 
 nix run .#provision-guests -- preflight      # run on the node: reads, writes nothing
 nix run .#provision-guests -- create         # run on the node
+nix run .#provision-guests -- verify         # each guest, field by field, against the inventory
 nix run .#provision-guests -- status
 ```
 
 `preflight` is what `create` runs first, and it is worth running on its own
-while the parameters are still being edited: it compares the pools the
-inventory names against `pvesm status` on the node, and reports the ones that
-are absent, offline or not carrying `content=images` — before a single volume
-is allocated. `create` stops on its findings, so a storage identifier the node
-does not know cannot leave half the guests created and half not.
+while the parameters are still being edited. It compares the declaration with
+the node and stops the run before a single volume is allocated:
+
+| Checked | Reported as | Because |
+| --- | --- | --- |
+| Every pool the inventory names is declared, active, and accepts `content=images` | error | `qm create` refuses all three with the same wording, naming the guest that happened to be next in the start order rather than the line that has to change. |
+| The format of each root volume is one its pool can hold | error | `qcow2` on a block-backed pool (`lvm`, `lvmthin`, `zfspool`, `rbd`) is refused; `raw` on a directory pool is accepted and silently costs the per-phase snapshots. |
+| A directory pool resolves to a device of its own, and declares `is_mountpoint` | error for the memory pool, warning elsewhere | A pool whose device is not mounted is a directory on the root filesystem. It accepts every write, and the separation the sizing rests on is gone with nothing reported. |
+| Free space against the volumes declared on each pool | warning | Thin pools accept the allocation and fail when the volumes are written, not when they are created. |
+| Each VMID is free, or holds the guest of that name | error | A VMID in use by a container, or by a guest this inventory did not create, is never written to. |
+| The bridge exists, and carries VLAN filtering | error / warning | `qm create` does not validate the bridge: the guest is created and comes up attached to nothing, which is diagnosed one layer above where it is. |
+| Node CPUs and available memory against the guests | error / warning | Proxmox refuses to start a guest with more virtual CPUs than the node has, and ballooning is disabled by design, so the memory assignment is fixed. |
+| The backup target is declared, active and carries `content=backup` | warning | Not needed to create a guest. It is the first of the three checks F-10 rests on, and cheaper to learn here. |
+
+An error stops `create`; a warning does not, because it states something about
+the node that the operator is the one placed to judge.
+
+`create` leaves a guest that already exists untouched, and compares it with the
+inventory instead of assuming it — skipping is only safe if something checks
+that what is there is what was declared. `verify` is that comparison on its
+own: cores, memory, ballooning, start order and delay, `onboot`, protection,
+the guest agent, the bridge and VLAN tag of every interface, and the pool, size
+and format of every volume. It reads what `qm config` reports rather than the
+arguments that produced it, because Proxmox normalises both the volume
+identifiers and the numbers. It corrects nothing — a difference is resolved by
+`qm set` on a stopped guest, or by destroying it and letting `create` build it
+again — and it is the command to run after any change made by hand.
 
 The bootstrap credential files come before the check, not after it, and this is
 the one ordering in the procedure that is not obvious from the error. The
