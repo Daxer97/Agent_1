@@ -340,10 +340,17 @@ inside it.
 nix develop                                  # sops, age, ssh-to-age on PATH
 
 mkdir -p ~/.config/sops/age                  # age-keygen does not create it
-age-keygen -o ~/.config/sops/age/keys.txt    # once, if you hold no key yet
+[ -f ~/.config/sops/age/keys.txt ] ||        # it refuses to overwrite, and should
+  age-keygen -o ~/.config/sops/age/keys.txt
 ADMIN=$(age-keygen -y ~/.config/sops/age/keys.txt)
 
-"${EDITOR:-vi}" parameters.nix               # then set parametersReviewed = true
+# The administrative SSH key, which is a different key from the age identity
+# above: this one is hermes.nix.adminKeys, and it is the only way into the
+# guests and into the installation image.
+[ -f ~/.ssh/id_ed25519 ] || ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519
+cat ~/.ssh/id_ed25519.pub
+
+"${EDITOR:-vi}" parameters.nix               # parametersReviewed = true, adminKeys
 "${EDITOR:-vi}" .sops.yaml                   # admin marker -> "$ADMIN"
 
 # One file per guest, encrypted to the operator alone. The shape is in
@@ -352,12 +359,23 @@ ADMIN=$(age-keygen -y ~/.config/sops/age/keys.txt)
 # for a recipient it cannot parse.
 for h in hrm-edge hrm-app hrm-mem hrm-sec; do
   "${EDITOR:-vi}" secrets/$h.yaml
+  # sops reports an empty file as "File cannot be completely empty" without
+  # saying which, and an unencrypted one is indistinguishable from a filled
+  # one at a glance.
+  if [ ! -s secrets/$h.yaml ]; then
+    echo "secrets/$h.yaml is empty — its shape is in secrets/README.md" >&2
+    continue
+  fi
   sops --config /dev/null --age "$ADMIN" --encrypt --in-place secrets/$h.yaml
 done
 git add secrets/*.yaml                       # untracked is invisible to the flake
 
 nix flake check                              # fails while a placeholder survives
 
+# The gate above stays red until the last placeholder is resolved, and two of
+# them belong to phases that have not run. It does not block this one: the
+# image and the guests are built from the parameters that are filled in, and
+# the only placeholder either of them refuses is adminKeys, by assertion.
 nix build .#installer-iso                    # on the node, once: see below
 install -m 0644 result/iso/hermes-installer.iso \
   "$(pvesm path local:iso/hermes-installer.iso)"
