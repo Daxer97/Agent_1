@@ -71,6 +71,61 @@ sops --config /dev/null --age "$ADMIN" --encrypt --in-place secrets/<host>.yaml
 git add secrets/<host>.yaml
 ```
 
+The keys are mechanical and the values are not: `role_id` and `secret_id` are
+issued by the secret store in F-03, which is after the phase that needs these
+files to exist. The four skeletons can therefore be written without an editor,
+which is also what a pasted F-02 block needs:
+
+```sh
+cat > secrets/hrm-sec.yaml <<'YAML'
+openbao:
+  eval:
+    role_id: PENDING_F03
+    secret_id: PENDING_F03
+YAML
+
+cat > secrets/hrm-mem.yaml <<'YAML'
+openbao:
+  memory:
+    role_id: PENDING_F03
+    secret_id: PENDING_F03
+YAML
+
+cat > secrets/hrm-app.yaml <<'YAML'
+openbao:
+  hermes:
+    role_id: PENDING_F03
+    secret_id: PENDING_F03
+  broker:
+    role_id: PENDING_F03
+    secret_id: PENDING_F03
+YAML
+
+cat > secrets/hrm-edge.yaml <<'YAML'
+openbao:
+  ingress:
+    role_id: PENDING_F03
+    secret_id: PENDING_F03
+authelia:
+  users_file: |
+    users: {}
+YAML
+
+for h in hrm-edge hrm-app hrm-mem hrm-sec; do
+  sops --config /dev/null --age "$ADMIN" --encrypt --in-place secrets/$h.yaml
+done
+git add secrets/*.yaml
+```
+
+What those markers are not is placeholders in the sense the rest of the
+repository uses the word: `nix flake check` reports `PLACEHOLDER_` by reading
+the working tree, and it cannot read inside a file that is encrypted. Nothing
+will report these back. They are replaced in F-03, from the role and secret
+identifiers the secret store issues, and the empty user population of the
+ingress guest is replaced before F-06 with the document whose shape is in
+`config/authelia/users.example.yml` — a population of none is a provider
+nobody can authenticate against.
+
 `--config /dev/null` applies until the guests exist. The rules in `.sops.yaml`
 name each guest's key alongside the administrator's, and sops will not encrypt
 for a recipient it cannot parse, so while those are still markers every

@@ -345,13 +345,17 @@ mkdir -p ~/.config/sops/age                  # age-keygen does not create it
 ADMIN=$(age-keygen -y ~/.config/sops/age/keys.txt)
 
 # The administrative SSH key, which is a different key from the age identity
-# above: this one is hermes.nix.adminKeys, and it is the only way into the
-# guests and into the installation image.
+# above: that one decrypts the credentials, this one is hermes.nix.adminKeys,
+# and it is the only way into the guests and into the installation image.
 [ -f ~/.ssh/id_ed25519 ] || ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519
-cat ~/.ssh/id_ed25519.pub
 
-"${EDITOR:-vi}" parameters.nix               # parametersReviewed = true, adminKeys
-"${EDITOR:-vi}" .sops.yaml                   # admin marker -> "$ADMIN"
+# Both markers are exact, so neither substitution needs an editor — which is
+# what a pasted block needs, since an editor started from one reads the rest
+# of the paste as its own input and the commands after it never run.
+sed -i "s|PLACEHOLDER_ADMIN_SSH_PUBLIC_KEY|$(cat ~/.ssh/id_ed25519.pub)|" parameters.nix
+sed -i "s|PLACEHOLDER_AGE_KEY_ADMIN|$ADMIN|" .sops.yaml
+
+"${EDITOR:-vi}" parameters.nix               # then read the rest of it through
 
 # One file per guest, encrypted to the operator alone. The shape is in
 # secrets/README.md. --config is what makes this possible today: the rules in
