@@ -998,6 +998,7 @@ let
         # installed system, and that is the one the credentials are encrypted
         # to.
         nixos-anywhere \
+          --option substitute false \
           --flake "$FLAKE#$host" \
           --ssh-option StrictHostKeyChecking=no \
           --ssh-option UserKnownHostsFile=/dev/null \
