@@ -67,10 +67,17 @@
         # backend.
         #
         # Renamed from 'HDD2' by RT-P-08. THE RENAME MUST BE APPLIED IN
-        # /etc/pve/storage.cfg BEFORE THE FIRST qm create: I-13 confirms qm
-        # list and pct list are still empty, so the window is open and the
-        # rename costs one line. After provisioning it costs every reference
-        # in the flake and in every qm command.
+        # /etc/pve/storage.cfg BEFORE THE FIRST qm create ON THIS POOL, and it
+        # has not been applied yet: the first provisioning run created VMID
+        # 204 on local-lvm and then stopped on 'storage nvme-mem does not
+        # exist' at the memory guest. That is the failure the preflight of
+        # provision-guests now reports before anything is allocated.
+        #
+        # The window is still open, because what closes it is a volume on this
+        # pool and not a guest on the node: nothing has been allocated here,
+        # so the rename still costs one line. After the memory guest is
+        # created it costs every reference in the flake and in every qm
+        # command. The procedure is under "Storage prerequisite" in README.md.
         memory = "nvme-mem";
 
         # 354.00 fsync/s measured on nvme-mem, above the threshold. The rate

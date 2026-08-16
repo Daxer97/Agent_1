@@ -346,9 +346,17 @@ git add secrets/*.yaml                       # untracked is invisible to the fla
 
 nix flake check                              # fails while a placeholder survives
 
+nix run .#provision-guests -- preflight      # run on the node: reads, writes nothing
 nix run .#provision-guests -- create         # run on the node
 nix run .#provision-guests -- status
 ```
+
+`preflight` is what `create` runs first, and it is worth running on its own
+while the parameters are still being edited: it compares the pools the
+inventory names against `pvesm status` on the node, and reports the ones that
+are absent, offline or not carrying `content=images` — before a single volume
+is allocated. `create` stops on its findings, so a storage identifier the node
+does not know cannot leave half the guests created and half not.
 
 The bootstrap credential files come before the check, not after it, and this is
 the one ordering in the procedure that is not obvious from the error. The
@@ -362,11 +370,14 @@ built from the parameters and not from a guest's activation, so it evaluates
 with no credential files present at all: if the ordering above is inconvenient,
 create the guests first and come back to the check.
 
-Four failures in this phase are worth telling apart, because each one names
-something other than what is actually missing:
+Six failures in this phase are worth telling apart, because each one names
+something other than what is actually missing, or names it without saying
+where it has to be corrected:
 
 | What is reported | What it means |
 | --- | --- |
+| `storage '<id>' does not exist` | Reported by `qm create`, and it is about the node rather than about the flake: the pool the inventory names is not declared in `/etc/pve/storage.cfg`. Declare it — see the storage prerequisite below — and run `create` again. Guests already created are left untouched, so the run resumes rather than restarting. `preflight` reports the same thing before anything has been allocated. |
+| `VMID <id> exists on this node as '<name>'` | Reported by `preflight`: the VMID is taken by a guest this inventory did not create, and nothing will be written to it. Free the VMID on the node, or move the guest to a free one in `parameters.nix`. |
 | `Path 'secrets/<host>.yaml' does not exist in Git repository` | The file has not been created. |
 | `getting status of '/nix/store/...-source/secrets/<host>.yaml'` | It exists in the working tree but was never `git add`ed. A flake is evaluated from the tracked tree; an untracked file is not there as far as the evaluation is concerned. |
 | `age-keygen: error: failed to open output file` | The directory above the key does not exist. `age-keygen` writes a file, it does not build a path. |
@@ -381,9 +392,39 @@ Four guests are created, not five: the observability role is aliased onto the
 secret store guest. The start order is a property of each machine, not a note
 in a procedure.
 
+#### Storage prerequisite
+
+Every pool named in `parameters.nix` — `site.storage.default`,
+`site.storage.memory`, and the pool of each additional volume — has to be
+declared on the node, active, and carrying `content=images` **before** the
+first `qm create`. The memory guest is the one that usually needs work: it is
+the only guest on a dedicated pool, and the identifier the flake uses is not
+necessarily the one the pool was created with.
+
 If you intend to rename a storage identifier, do it **before** the first guest
-is created. After that the cost moves from one configuration line to every
-reference in the flake and in every management command.
+is created. While no volume refers to the pool the rename is one line; after
+that the cost moves to every reference in the flake and in every management
+command.
+
+```sh
+pvesm status                                    # what the node has today
+awk '/^dir: <current-id>/,/^$/' /etc/pve/storage.cfg   # its path and contents
+
+# Nothing has been allocated on it yet, so re-declaring it under the new
+# identifier loses no data — the directory is untouched. Match the type and
+# the content list to what the pool actually is.
+pvesm remove <current-id>
+pvesm add dir <new-id> --path <path> --content images
+
+pvesm status --content images                   # <new-id>: listed and active
+```
+
+The pool holding the memory guest is directory-backed on purpose, because its
+root volume is declared `qcow2` and a block-backed pool (`lvm`, `lvmthin`,
+`zfspool`, `rbd`) holds raw volumes only — with raw, the per-phase snapshots
+are unavailable and the installation procedure loses its rollback points.
+`preflight` refuses that combination rather than letting `qm create` discover
+it.
 
 Install NixOS and register the host keys for decryption:
 
@@ -406,6 +447,10 @@ Snapshot:
 ```sh
 nix run .#provision-guests -- snapshot poc-f02
 ```
+
+`snapshot` refuses to run while any guest is missing, and names the ones that
+are: a snapshot of some of the guests is not a rollback point for the phase —
+rolling back to it lands on a node in a state that never existed.
 
 ### F-03 — Secret store, policies and bootstrap credential
 
