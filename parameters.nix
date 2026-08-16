@@ -332,6 +332,19 @@
 
       provisioningMethod = "nixos-anywhere";
 
+      # The operator's public key, admitted as root on the installation image
+      # and on every guest. Password authentication is disabled on both, so
+      # this is the only way in — and the installation does not merely use it
+      # for convenience: it reads each guest's host key back over this channel
+      # to encrypt that guest's credentials to it.
+      #
+      # Read it, do not retype it:
+      #     cat ~/.ssh/id_ed25519.pub
+      #
+      # It is the public half. The private half stays on the workstation, and
+      # the same key is what nixos-anywhere authenticates with.
+      adminKeys = [ "PLACEHOLDER_ADMIN_SSH_PUBLIC_KEY" ];
+
       # Derived from the SSH host key: no additional key to distribute.
       sopsAgeKeyPath = "/etc/ssh/ssh_host_ed25519_key";
     };

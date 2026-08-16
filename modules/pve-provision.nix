@@ -8,8 +8,18 @@
 # The script is meant to run on the Proxmox node. It is generated here so that
 # it cannot drift from the declaration.
 #
-# Three properties matter as much as the commands themselves, and all three
-# exist because the node holds state the flake cannot see:
+# What it produces is a machine that can be installed onto, not a virtual
+# machine that exists. The two are not the same thing, and the difference is
+# where a procedure stops being reproducible: nixos-anywhere connects over SSH
+# to a Linux already running on the target, and a guest with empty volumes and
+# no media has nothing to answer with. So `create` also attaches the image
+# this flake builds, starts the guest, and waits for it — the image carries
+# the administrative keys and recognises each guest by the hardware address
+# the inventory assigns it, which is why that address is declared rather than
+# left to Proxmox.
+#
+# Three further properties matter as much as the commands themselves, and all
+# three exist because the node holds state the flake cannot see:
 #
 #   * `create` refuses to start until the node matches what the inventory
 #     assumes: the pools it names, the bridge it attaches to, the capacity it
@@ -124,7 +134,8 @@ let
           ${id} ${guest.hostName} ${toString guest.cores} \
           ${toString guest.memoryMb} ${toString guest.diskGb} \
           ${vlanOf guest.zone} ${toString guest.bootOrder} \
-          ${guest.storage} ${guest.diskFormat} ${toString guest.bootDelay}
+          ${guest.storage} ${guest.diskFormat} ${toString guest.bootDelay} \
+          ${guest.macAddress}
     ''
     # Indexed from one, because net0 is the primary interface created above.
     # The index is not decoration: common.nix names the additional interfaces
@@ -166,7 +177,45 @@ let
     + ''
 
         echo "${id} ${guest.hostName}: created."
+        CREATED+=(${id})
       fi
+    '';
+
+  # Attaching the image and starting the guest is part of creating it: a guest
+  # that exists and has never booted is not a machine anybody can install
+  # onto, and every step that would make it one by hand — the media, the boot
+  # order, an address typed into a console — is a place where the node stops
+  # matching the declaration.
+  bootstrapGuest = role:
+    let
+      guest = cfg.guests.${role};
+      id = toString guest.vmid;
+    in
+    ''
+      if vm_exists ${id}; then
+        bootstrap_guest ${id} ${guest.hostName} ${guest.address}
+      else
+        problem "${id} ${guest.hostName} does not exist: run create first."
+      fi
+    '';
+
+  bootstrapCreated = role:
+    let
+      guest = cfg.guests.${role};
+      id = toString guest.vmid;
+    in
+    ''
+      if was_created ${id}; then
+        bootstrap_guest ${id} ${guest.hostName} ${guest.address}
+      fi
+    '';
+
+  installGuest = role:
+    let
+      guest = cfg.guests.${role};
+    in
+    ''
+      install_guest ${toString guest.vmid} ${guest.hostName} ${guest.address}
     '';
 
   # The counterpart of createGuest: every field it sets, read back and
@@ -196,6 +245,7 @@ let
         expect_field "${who}" net0 bridge '${cfg.network.bridge}'
         expect_field "${who}" net0 tag '${vlanOf guest.zone}'
         expect_field "${who}" net0 firewall '1'
+        expect_field "${who}" net0 virtio '${guest.macAddress}'
         expect_volume "${who}" scsi0 '${guest.storage}' '${toString guest.diskGb}' '${guest.diskFormat}'
     ''
     + lib.concatStrings (lib.imap1
@@ -234,7 +284,10 @@ let
         cat <<'USAGE'
       Usage:
         hermes-provision-guests preflight         check the node, create nothing
-        hermes-provision-guests create            create the guests that do not exist yet
+        hermes-provision-guests create            create the guests, boot the installer on them
+        hermes-provision-guests bootstrap         boot the installer on guests that exist
+        hermes-provision-guests install           run nixos-anywhere over every guest, in order
+        hermes-provision-guests eject             remove the installation media after installing
         hermes-provision-guests verify            compare the guests with the inventory
         hermes-provision-guests fsync             measure the fsync rate of the memory pool
         hermes-provision-guests snapshot <label>  snapshot every guest
@@ -243,7 +296,13 @@ let
       create runs preflight first and stops on its findings, before the node
       has been written to. Guests that already exist are left untouched and
       compared with the inventory instead, so an interrupted run is finished
-      by running create again.
+      by running create again. Each guest it creates is then started on the
+      installation image built by this flake and waited for, so that what
+      create leaves behind is a machine that answers on its declared address.
+
+      install runs from the repository, which is where the flake it deploys
+      is: nixos-anywhere is not part of this script, and it is expected on
+      PATH — `nix shell github:nix-community/nixos-anywhere -c ...`.
 
       fsync is separate because it writes to the pool and takes seconds; the
       rest read the node and nothing else.
@@ -254,6 +313,23 @@ let
 
       BRIDGE="${cfg.network.bridge}"
       MEMORY_POOL="${cfg.site.storage.memory}"
+      ISO_POOL="${cfg.site.storage.iso}"
+      INSTALLER_VOLUME="${cfg.site.storage.iso}:iso/${cfg.site.installerImage}"
+      INSTALLER_IMAGE="${cfg.site.installerImage}"
+
+      # How long a guest is given to boot the image and answer on port 22.
+      # Generous on purpose: it is measured from a cold start of a machine
+      # that decompresses its whole root filesystem into memory first.
+      SSH_TIMEOUT=300
+
+      # The flake install deploys, which is the repository this script was
+      # built from and not the store path it lives in.
+      FLAKE="''${FLAKE:-.}"
+
+      # VMIDs created by this run. Only these are booted on the installation
+      # image: a guest that already existed may be installed, and starting it
+      # on the installer is not what 'create' was asked to do.
+      CREATED=()
       BACKUP_TARGET="${cfg.site.backupTarget}"
       BACKUP_MOUNT="${cfg.site.backupMountPoint}"
       FSYNC_MINIMUM=${toString cfg.site.storage.fsyncMinimum}
@@ -295,6 +371,7 @@ let
       # in every case.
       STORAGE_ALL=""
       STORAGE_IMAGES=""
+      STORAGE_ISO=""
 
       # Pools already examined. A pool carries several volumes, and reporting
       # one absent pool once per volume it was going to hold turns a single
@@ -316,6 +393,7 @@ let
 
         STORAGE_ALL=$(pvesm status 2>/dev/null | awk 'NR > 1 { print $1 "\t" $2 "\t" $3 "\t" $6 }')
         STORAGE_IMAGES=$(pvesm status --content images 2>/dev/null | awk 'NR > 1 { print $1 }')
+        STORAGE_ISO=$(pvesm status --content iso 2>/dev/null | awk 'NR > 1 { print $1 }')
         NODE_READ=1
       }
 
@@ -326,11 +404,14 @@ let
       # A property as declared, which is not the same question as what pvesm
       # reports: the path of a pool and whether it is required to be a mount
       # point exist only in the configuration file.
+      # Absent or unreadable, the file yields nothing rather than a status:
+      # every caller treats an unset property as unset, and an assignment that
+      # carried awk's exit status would end the run with no message at all.
       storage_option() {
         awk -v want="$1" -v key="$2" '
           /^[a-z]+: / { section = $2; next }
           section == want && $1 == key { $1 = ""; sub(/^[ \t]+/, ""); print; exit }
-        ' /etc/pve/storage.cfg 2>/dev/null
+        ' /etc/pve/storage.cfg 2>/dev/null || true
       }
 
       vm_exists() {
@@ -604,6 +685,41 @@ let
         fi
       }
 
+      # The image is checked here and not where it is attached, because create
+      # boots the guests it creates: without it, create would allocate every
+      # volume and stop at the first guest it cannot start, which is the
+      # failure mode this gate exists to remove.
+      check_installer() {
+        local path
+
+        if [ -z "$(storage_field "$ISO_POOL" 2)" ]; then
+          problem "iso pool '$ISO_POOL' is not declared on this node."
+          return 0
+        fi
+
+        if ! printf '%s\n' "$STORAGE_ISO" | grep -qx "$ISO_POOL"; then
+          problem "pool '$ISO_POOL' does not accept content of type iso."
+          note "    pvesm set $ISO_POOL --content iso,<the contents it already carries>"
+          return 0
+        fi
+
+        path=$(pvesm path "$INSTALLER_VOLUME" 2>/dev/null || true)
+        if [ -z "$path" ]; then
+          problem "'$INSTALLER_VOLUME' has no path on this node."
+          return 0
+        fi
+
+        if [ ! -f "$path" ]; then
+          problem "the installation image is not on the node: $INSTALLER_VOLUME"
+          note "It is built from this flake, and it carries the administrative"
+          note "keys and the address of every guest: a guest that boots it"
+          note "comes up reachable, with nothing typed into a console. From"
+          note "the repository, on this node:"
+          note "    nix build .#installer-iso"
+          note "    install -m 0644 result/iso/$INSTALLER_IMAGE $path"
+        fi
+      }
+
       cmd_preflight() {
         read_node
         PROBLEMS=0
@@ -614,6 +730,7 @@ let
         ${vmidChecks}
         check_bridge
         check_capacity
+        check_installer
         check_backup_target
 
         if [ "$PROBLEMS" -gt 0 ]; then
@@ -726,6 +843,7 @@ let
       create_guest() {
         local id="$1" name="$2" cores="$3" ram="$4" disk="$5"
         local vlan="$6" order="$7" store="$8" fmt="$9" delay="''${10}"
+        local mac="''${11}"
 
         qm create "$id" \
           --name "$name" --ostype l26 --cpu host \
@@ -733,9 +851,97 @@ let
           --numa ${if cfg.site.numa then "1" else "0"} \
           --scsihw virtio-scsi-single \
           --scsi0 "''${store}:''${disk},iothread=1,discard=on,ssd=1,format=''${fmt}" \
-          --net0 "virtio,bridge=${cfg.network.bridge},tag=''${vlan},firewall=1" \
+          --net0 "virtio=''${mac},bridge=${cfg.network.bridge},tag=''${vlan},firewall=1" \
           --onboot 1 --startup "order=''${order},up=''${delay}" \
           --agent enabled=1 --protection 1
+      }
+
+      was_created() {
+        local id="$1" created
+        for created in ''${CREATED[@]+"''${CREATED[@]}"}; do
+          if [ "$created" = "$id" ]; then
+            return 0
+          fi
+        done
+        return 1
+      }
+
+      # --- Bringing a guest up on the installation image -------------------
+      #
+      # nixos-anywhere does not create a machine and does not boot one: it
+      # connects over SSH to a Linux already running on the target. This is
+      # what puts that Linux there, from the image this flake builds, so that
+      # the sequence needs no console — the image carries the administrative
+      # keys and recognises each guest by the hardware address the inventory
+      # assigns it.
+      bootstrap_guest() {
+        local id="$1" host="$2" address="$3"
+
+        load_guest "$id"
+
+        if [ "$(cfg_value ide2)" != "$INSTALLER_VOLUME,media=cdrom" ]; then
+          qm set "$id" --ide2 "$INSTALLER_VOLUME,media=cdrom"
+        fi
+
+        # Disk first, image second. An uninstalled volume carries no boot
+        # signature and the firmware falls through to the image; once
+        # nixos-anywhere has written a bootloader, the same order boots the
+        # installed system — including at the reboot that ends the
+        # installation, which the reverse order would send back to the
+        # installer for as long as the media stayed attached.
+        if [ "$(cfg_value boot)" != "order=scsi0;ide2" ]; then
+          qm set "$id" --boot 'order=scsi0;ide2'
+        fi
+
+        if [ "$(qm status "$id" | awk '{ print $2 }')" != "running" ]; then
+          qm start "$id"
+        fi
+
+        wait_for_ssh "$id" "$host" "$address"
+      }
+
+      wait_for_ssh() {
+        local id="$1" host="$2" address="$3" waited=0
+
+        printf '%s %s: waiting for ssh on %s ' "$id" "$host" "$address"
+
+        while [ "$waited" -lt "$SSH_TIMEOUT" ]; do
+          if (exec 3<>"/dev/tcp/$address/22") 2>/dev/null; then
+            printf ' answered after %ss.\n' "$waited"
+            return 0
+          fi
+          sleep 5
+          waited=$((waited + 5))
+          printf '.'
+        done
+
+        printf '\n'
+        problem "$id $host did not answer on $address:22 within ''${SSH_TIMEOUT}s."
+        note "The guest is started and the media is attached, so what is left"
+        note "is what the console shows: it boots the image, or it does not."
+        note "    qm status $id                 # running?"
+        note "    qm config $id | grep -E 'ide2|boot|net0'"
+        note "The image configures a guest by the hardware address of net0. If"
+        note "that address is not the declared one — 'verify' reports it — the"
+        note "guest boots with no address at all."
+        note "A guest stopped at 'no bootable device' did not fall through from"
+        note "its empty disk to the image, and can be sent to it directly:"
+        note "    qm set $id --boot 'order=ide2;scsi0'"
+        note "That order boots the installer again after the installation, so"
+        note "put it back — or run eject — once the guest is installed."
+      }
+
+      cmd_bootstrap() {
+        read_node
+        PROBLEMS=0
+
+        ${lib.concatStrings (map bootstrapGuest byBootOrder)}
+
+        if [ "$PROBLEMS" -gt 0 ]; then
+          return 1
+        fi
+
+        echo "Every guest answers on port 22 at its declared address."
       }
 
       cmd_create() {
@@ -753,7 +959,111 @@ let
         echo
         cmd_verify || true
 
+        # Only what this run created. A guest that was already there may be
+        # installed and running its own system, and starting it on an
+        # installation image is not a step create was asked to take.
+        if [ "''${#CREATED[@]}" -gt 0 ]; then
+          echo
+          PROBLEMS=0
+          ${lib.concatStrings (map bootstrapCreated byBootOrder)}
+        fi
+
         qm list
+
+        if [ "$PROBLEMS" -gt 0 ]; then
+          return 1
+        fi
+      }
+
+      install_guest() {
+        local id="$1" host="$2" address="$3"
+
+        if ! vm_exists "$id"; then
+          echo "$id $host does not exist. Run create first." >&2
+          exit 1
+        fi
+
+        echo
+        echo "=== $id $host: $FLAKE#$host onto $address ==="
+
+        # The host key of the image is generated at every boot, and the guest
+        # it belongs to has no identity yet: recording it would be recording
+        # the identity of the installer, which the installation then replaces.
+        # The identity that matters is registered afterwards, from the
+        # installed system, and that is the one the credentials are encrypted
+        # to.
+        nixos-anywhere \
+          --flake "$FLAKE#$host" \
+          --ssh-option StrictHostKeyChecking=no \
+          --ssh-option UserKnownHostsFile=/dev/null \
+          "root@$address"
+      }
+
+      # In start order, and stopping at the first failure: a guest installed
+      # before the secret store is a guest whose services start without their
+      # credentials.
+      cmd_install() {
+        read_node
+
+        if ! command -v nixos-anywhere >/dev/null 2>&1; then
+          echo "nixos-anywhere is not on PATH. It is not part of this script:" >&2
+          echo "  nix shell github:nix-community/nixos-anywhere \\" >&2
+          echo "    -c nix run .#provision-guests -- install" >&2
+          exit 2
+        fi
+
+        if [ ! -e "$FLAKE/flake.nix" ] && [ "''${FLAKE#*:}" = "$FLAKE" ]; then
+          echo "No flake at '$FLAKE'. Run this from the repository, or set" >&2
+          echo "FLAKE to where it is." >&2
+          exit 2
+        fi
+
+        ${lib.concatStrings (map installGuest byBootOrder)}
+
+        echo
+        echo "Installed. Register the host keys before the guests are expected"
+        echo "to decrypt anything: the credentials are still encrypted to the"
+        echo "operator alone."
+      }
+
+      # After the installation, and not before: while the guest boots from its
+      # own disk the media costs nothing, and it is the way back if the
+      # installation has to be repeated.
+      cmd_eject() {
+        read_node
+
+        local id protection
+
+        for id in "''${VMIDS[@]}"; do
+          if ! vm_exists "$id"; then
+            continue
+          fi
+
+          load_guest "$id"
+
+          if [ -z "$(cfg_value ide2)" ]; then
+            echo "$id: no installation media attached."
+            continue
+          fi
+
+          # Protection refuses the removal of a drive, which is what it is
+          # for. It is cleared for the length of the removal and restored,
+          # because a guest left unprotected is a guest one qm destroy away
+          # from gone.
+          protection=$(cfg_value protection)
+          if [ "$protection" = "1" ]; then
+            qm set "$id" --protection 0
+          fi
+
+          qm set "$id" --delete ide2
+          qm set "$id" --boot 'order=scsi0'
+
+          if [ "$protection" = "1" ]; then
+            qm set "$id" --protection 1
+          fi
+
+          echo "$id: installation media removed, boots from its own disk."
+        done
       }
 
       cmd_fsync() {
@@ -836,6 +1146,9 @@ let
       case "''${1:-}" in
         preflight) cmd_preflight ;;
         create)    cmd_create ;;
+        bootstrap) cmd_bootstrap ;;
+        install)   cmd_install ;;
+        eject)     cmd_eject ;;
         verify)    cmd_verify ;;
         fsync)     cmd_fsync ;;
         snapshot)  shift; cmd_snapshot "''${1:-}" ;;

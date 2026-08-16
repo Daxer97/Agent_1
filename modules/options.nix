@@ -97,7 +97,7 @@ let
     };
   };
 
-  guestModule = types.submodule ({ name, ... }: {
+  guestModule = types.submodule ({ name, config, ... }: {
     options = {
       hostName = mkOption {
         type = types.str;
@@ -156,6 +156,32 @@ let
       address = mkOption {
         type = ipv4;
         description = "Address of the primary interface.";
+      };
+
+      macAddress = mkOption {
+        type = types.strMatching "([0-9A-F]{2}:){5}[0-9A-F]{2}";
+        default =
+          let
+            octet = shift: hex ((config.vmid / shift) - ((config.vmid / (shift * 256)) * 256));
+            hex = value: lib.fixedWidthString 2 "0" (lib.toHexString value);
+          in
+          "02:00:${octet 16777216}:${octet 65536}:${octet 256}:${octet 1}";
+        description = ''
+          Hardware address of the primary interface. Derived from the VMID and
+          locally administered, so that it is a property of the declaration
+          rather than of the moment the guest was created.
+
+          It is what makes one installation image serve every guest: the image
+          carries no per-guest configuration except a table keyed by this
+          address, and the zones of this design have no DHCP server to hand a
+          machine its address before it is installed. Proxmox would otherwise
+          assign a random one at creation, which is knowable only after the
+          fact and different on every node the inventory is applied to.
+
+          The additional interfaces keep the address Proxmox generates: they
+          carry no traffic until the guest is installed, and nothing has to
+          recognise them before that.
+        '';
       };
 
       extraInterfaces = mkOption {
@@ -270,6 +296,29 @@ in
           default = 200;
           description = "Lowest acceptable fsync rate, in operations per second, on the pool hosting the vector index.";
         };
+
+        iso = mkOption {
+          type = types.str;
+          default = "local";
+          description = ''
+            Pool holding the installation image. It must carry content=iso,
+            which the pool Proxmox creates under this name does by default.
+          '';
+        };
+      };
+
+      installerImage = mkOption {
+        type = types.str;
+        default = "hermes-installer.iso";
+        description = ''
+          File name of the installation image on the iso pool. The image is
+          built by this flake — `nix build .#installer-iso` — and carries the
+          administrative keys and the address of every guest, so that the
+          first boot of a guest needs no console and no password.
+
+          The name is a parameter because two places have to agree on it: the
+          image that is built and the media the provisioning script attaches.
+        '';
       };
 
       backupTarget = mkOption {
@@ -392,6 +441,20 @@ in
           first SCSI disk, and the additional volumes follow it as sdb, sdc
           and so on. Changing the attachment in pve-provision.nix without
           changing this leaves the installer partitioning the wrong disk.
+        '';
+      };
+
+      adminKeys = mkOption {
+        type = types.listOf types.str;
+        description = ''
+          SSH public keys admitted as root, on the guests and on the
+          installation image alike.
+
+          Password authentication is disabled on both, so this list is the
+          only way in. An empty one produces guests nobody can reach —
+          including the step of the installation that reads a guest's host key
+          back in order to encrypt its credentials to it, which is what the
+          rest of the procedure rests on.
         '';
       };
 

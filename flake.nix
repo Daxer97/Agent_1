@@ -202,10 +202,25 @@
       };
 
       pveProvision = reference.system.build.pveProvisionScript;
+
+      # The image every guest boots before it is installed. It is built from
+      # the same parameters as the guests — the addresses it configures and
+      # the keys it admits are theirs — and it is not one of them: it holds no
+      # role, and nothing it contains survives the installation it exists to
+      # make possible.
+      installerIso = (lib.nixosSystem {
+        inherit system;
+        specialArgs = { hermes = reference.hermes; };
+        modules = [
+          ./modules/installer.nix
+          { nixpkgs.pkgs = pkgs; }
+        ];
+      }).config.system.build.isoImage;
     in
     {
       packages.${system} = {
         inherit egressBroker hermesEnv baoPolicies pveProvision;
+        installer-iso = installerIso;
         default = egressBroker;
       };
 

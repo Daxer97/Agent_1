@@ -358,8 +358,12 @@ git add secrets/*.yaml                       # untracked is invisible to the fla
 
 nix flake check                              # fails while a placeholder survives
 
+nix build .#installer-iso                    # on the node, once: see below
+install -m 0644 result/iso/hermes-installer.iso \
+  "$(pvesm path local:iso/hermes-installer.iso)"
+
 nix run .#provision-guests -- preflight      # run on the node: reads, writes nothing
-nix run .#provision-guests -- create         # run on the node
+nix run .#provision-guests -- create         # creates, then boots each one on the image
 nix run .#provision-guests -- verify         # each guest, field by field, against the inventory
 nix run .#provision-guests -- status
 ```
@@ -377,6 +381,7 @@ the node and stops the run before a single volume is allocated:
 | Each VMID is free, or holds the guest of that name | error | A VMID in use by a container, or by a guest this inventory did not create, is never written to. |
 | The bridge exists, and carries VLAN filtering | error / warning | `qm create` does not validate the bridge: the guest is created and comes up attached to nothing, which is diagnosed one layer above where it is. |
 | Node CPUs and available memory against the guests | error / warning | Proxmox refuses to start a guest with more virtual CPUs than the node has, and ballooning is disabled by design, so the memory assignment is fixed. |
+| The installation image is on the iso pool, and the pool carries `content=iso` | error | `create` boots each guest it creates on that image. Without it, `create` would allocate every volume and stop at the first guest it cannot start. |
 | The backup target is declared, active and carries `content=backup` | warning | Not needed to create a guest. It is the first of the three checks F-10 rests on, and cheaper to learn here. |
 
 An error stops `create`; a warning does not, because it states something about
@@ -386,8 +391,8 @@ the node that the operator is the one placed to judge.
 inventory instead of assuming it — skipping is only safe if something checks
 that what is there is what was declared. `verify` is that comparison on its
 own: cores, memory, ballooning, start order and delay, `onboot`, protection,
-the guest agent, the bridge and VLAN tag of every interface, and the pool, size
-and format of every volume. It reads what `qm config` reports rather than the
+the guest agent, the bridge and VLAN tag of every interface, the hardware
+address of the primary one, and the pool, size and format of every volume. It reads what `qm config` reports rather than the
 arguments that produced it, because Proxmox normalises both the volume
 identifiers and the numbers. It corrects nothing — a difference is resolved by
 `qm set` on a stopped guest, or by destroying it and letting `create` build it
@@ -461,66 +466,71 @@ are unavailable and the installation procedure loses its rollback points.
 `preflight` refuses that combination rather than letting `qm create` discover
 it.
 
-#### Booting the installer
+#### The installation image
 
 `nixos-anywhere` neither creates a machine nor boots one: it connects over SSH
-to a Linux already running on the target and takes it from there. A guest
-created by `provision-guests` has empty volumes and no boot media, so there is
-nothing at its address to connect to — and the failure is reported as
-`No route to host`, which names the network instead of the missing installer.
+to a Linux already running on the target and takes it from there. A guest with
+empty volumes and no media has nothing to answer with, and the failure is
+reported as `No route to host` — which names the network instead of the absent
+installer.
 
-Boot each guest once on the NixOS minimal image, in start order. Any Linux with
-`sshd` would do; the image matching the pinned release is the one to reach for,
-since what it provides is only the shell `nixos-anywhere` disassembles.
-
-```sh
-# On the node. The pool must carry content=iso, which 'local' does by default.
-cd /var/lib/vz/template/iso
-curl -LO https://channels.nixos.org/nixos-25.05/latest-nixos-minimal-x86_64-linux.iso
-
-qm set <vmid> --ide2 local:iso/latest-nixos-minimal-x86_64-linux.iso,media=cdrom
-qm set <vmid> --boot 'order=ide2;scsi0'
-qm start <vmid>
-```
-
-Then in the guest's console — the noVNC console of the web interface, since no
-serial console is configured on the installer image:
+The stock minimal image cannot be that Linux either, or not without a console:
+it comes up with no authorised key and no address, and these zones carry no
+DHCP server. So the image is built from the inventory instead, once, and it
+serves every guest:
 
 ```sh
-sudo -i
-passwd                                       # nixos-anywhere authenticates as root
-ip -br link                                  # the interface, usually ens18
-ip addr add <declared address>/24 dev ens18
-ip route add default via <gateway of its zone>
+nix build .#installer-iso                    # on the node
+install -m 0644 result/iso/hermes-installer.iso \
+  "$(pvesm path local:iso/hermes-installer.iso)"
 ```
 
-The address is not negotiated. These zones carry no DHCP server, and the
-address of each guest is a parameter: give the installer the address declared
-for that guest in `parameters.nix`, so that the machine keeps answering at the
-same place once it is installed and configures that address itself.
+It carries the administrative keys of `hermes.nix.adminKeys` and a table of
+every guest's address keyed by hardware address — which is why those addresses
+are declared, derived from the VMID, rather than left to Proxmox to generate.
+A guest that boots it recognises itself, configures the address it will keep
+once installed, and admits the operator's key. Nothing is typed into a console,
+and `preflight` refuses to create anything while the image is missing.
+
+`create` attaches it, starts each guest it created, and waits for port 22 to
+answer. What it leaves behind is not four virtual machines: it is four
+machines that can be installed onto.
+
+#### Installing
 
 ```sh
-export SSHPASS=<the password just set>       # several SSH sessions, asked once
-nixos-anywhere --env-password --flake .#<host> root@<declared address>
+nix shell github:nix-community/nixos-anywhere \
+  -c nix run .#provision-guests -- install
 ```
 
-`No route to host` at this point means nothing answers at that address:
-the guest is not started, it did not boot the image, or it has no address on
-that VLAN. `Connection refused` means the opposite — something is there and
-the port is closed, which on this node is worth checking against the Proxmox
-firewall, since every interface is created with `firewall=1` and a
-default-deny input policy stops SSH before the guest sees it
-(`pve-firewall status`).
+In start order, stopping at the first failure — a guest installed before the
+secret store is a guest whose services start without their credentials. It is
+`nixos-anywhere --flake .#<host> root@<declared address>` per guest, from the
+repository, with the host key of the image neither recorded nor trusted: it is
+generated at every boot and belongs to a machine that has no identity yet. The
+identity that matters is the one registered below, from the installed system.
 
-Once installed, drop the installer media so the guest boots from its own disk:
+Two failures are worth telling apart here. `No route to host` means nothing
+answers at that address — the guest is not running, did not boot the image, or
+came up without an address, which happens when the hardware address of `net0`
+is not the declared one (`verify` reports that). `Connection refused` is the
+opposite: something is there and the port is closed, which on this node is
+worth checking against the Proxmox firewall, since every interface is created
+with `firewall=1` and a default-deny input policy stops SSH before the guest
+sees it (`pve-firewall status`).
+
+Once every guest is installed:
 
 ```sh
-qm set <vmid> --delete ide2 --boot 'order=scsi0'
+nix run .#provision-guests -- eject
 ```
 
-Protection refuses that removal — the guests are created with `--protection 1`.
-Clear it, remove the drive, and set it back; `verify` reports the guest as
-drifted for as long as it stays off.
+The media is removed and the boot order reduced to the disk. It is left
+attached until then on purpose: while the guest boots from its own disk the
+media costs nothing, and it is the way back if an installation has to be
+repeated. `eject` clears the protection flag for the length of the removal and
+restores it — Proxmox refuses to remove a drive from a protected guest, which
+is what protection is for.
 
 #### Registering the host keys
 
@@ -871,6 +881,8 @@ wrong.
 | `hermes.site.storage.default` | string | Storage pool backing the guests that have no dedicated device. | — |
 | `hermes.site.storage.memory` | string | Storage pool dedicated to the memory guest. Must be a physically separate device. | — |
 | `hermes.site.storage.fsyncMinimum` | integer | Lowest acceptable fsync rate on the pool hosting the vector index, in operations per second. | `200` |
+| `hermes.site.storage.iso` | string | Pool holding the installation image. Must carry `content=iso`. | `local` |
+| `hermes.site.installerImage` | string | File name of the installation image on that pool. Two places have to agree on it: the image this flake builds and the media the provisioning script attaches. | `hermes-installer.iso` |
 | `hermes.site.backupTarget` | string | Storage receiving guest-level backups. | — |
 | `hermes.site.backupMountPoint` | path | Mount point of the backup storage on the node. | — |
 | `hermes.site.numa` | boolean | Expose a NUMA topology to the guests. Enable only on a node with more than one node. | `false` |
@@ -913,6 +925,7 @@ Declared per role under `hermes.guests.<role>`, where `<role>` is one of
 | `extraDisks` | list of volume | Additional volumes, each with `sizeGb`, `storage` and `mountPoint`. | `[ ]` |
 | `zone` | `edge` \| `app` \| `data` | Primary network zone. | — |
 | `address` | IPv4 | Address of the primary interface. | — |
+| `macAddress` | MAC | Hardware address of the primary interface, locally administered and derived from the VMID. It is what lets one installation image serve every guest: the image carries a table keyed by it, and these zones have no DHCP server to hand a machine its address before it is installed. | derived |
 | `extraInterfaces` | list of interface | Additional interfaces, each with `zone` and `address`. Only the ingress guest is dual-homed. | `[ ]` |
 | `bootOrder` | integer, 1–5 | Start order. Binding rather than conventional: a service started before the secret store does not find its credentials. | — |
 | `bootDelay` | integer | Seconds before the next guest in the order is released. | `30` |
@@ -927,6 +940,7 @@ Declared per role under `hermes.guests.<role>`, where `<role>` is one of
 | `hermes.nix.substituters` | list of string | Binary caches consulted during a rebuild. | — |
 | `hermes.nix.buildHost` | string or null | Host performing the builds. The agentic guest denies outbound traffic and has no working local build path. | `null` |
 | `hermes.nix.provisioningMethod` | `iso` \| `nixos-anywhere` \| `template-clone` | Method used for the first installation of a guest. | `nixos-anywhere` |
+| `hermes.nix.adminKeys` | list of string | SSH public keys admitted as root, on the guests and on the installation image alike. Password authentication is disabled on both, so this is the only way in — including for the step that reads a guest's host key back to encrypt its credentials to it. | — |
 | `hermes.nix.rootDevice` | string | Block device carrying the root volume inside the guest. Follows the attachment in `pve-provision.nix` — the root volume is `scsi0`, the additional ones follow as `sdb` onwards. | `/dev/sda` |
 | `hermes.nix.sopsAgeKeyPath` | path | Private key from which the age identity is derived. Deriving it from the host key means there is no extra key to distribute. | `/etc/ssh/ssh_host_ed25519_key` |
 

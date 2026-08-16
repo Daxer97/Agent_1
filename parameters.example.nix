@@ -190,6 +190,11 @@
       buildHost = "PLACEHOLDER_NIX_BUILD_HOST";
 
       provisioningMethod = "nixos-anywhere";
+
+      # Admitted as root on the installation image and on every guest;
+      # password authentication is disabled on both. `cat ~/.ssh/id_ed25519.pub`
+      adminKeys = [ "PLACEHOLDER_ADMIN_SSH_PUBLIC_KEY" ];
+
       sopsAgeKeyPath = "/etc/ssh/ssh_host_ed25519_key";
     };
 

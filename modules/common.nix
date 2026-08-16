@@ -137,6 +137,14 @@ in
       };
     };
 
+    # Administrative access is by key and by key alone: password
+    # authentication is disabled above, so an empty list here is a guest
+    # nobody can reach. It is not only a convenience for the operator — the
+    # installation reads each guest's host key back over this channel in order
+    # to encrypt that guest's credentials to it, and every rebuild after the
+    # first is pushed through it.
+    users.users.root.openssh.authorizedKeys.keys = cfg.nix.adminKeys;
+
     # The guest agent is what lets the node take a consistent snapshot and
     # report the guest address back. Both are relied upon by the installation
     # procedure.
