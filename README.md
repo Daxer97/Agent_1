@@ -461,12 +461,72 @@ are unavailable and the installation procedure loses its rollback points.
 `preflight` refuses that combination rather than letting `qm create` discover
 it.
 
-Install NixOS and register the host keys for decryption:
+#### Booting the installer
+
+`nixos-anywhere` neither creates a machine nor boots one: it connects over SSH
+to a Linux already running on the target and takes it from there. A guest
+created by `provision-guests` has empty volumes and no boot media, so there is
+nothing at its address to connect to — and the failure is reported as
+`No route to host`, which names the network instead of the missing installer.
+
+Boot each guest once on the NixOS minimal image, in start order. Any Linux with
+`sshd` would do; the image matching the pinned release is the one to reach for,
+since what it provides is only the shell `nixos-anywhere` disassembles.
+
+```sh
+# On the node. The pool must carry content=iso, which 'local' does by default.
+cd /var/lib/vz/template/iso
+curl -LO https://channels.nixos.org/nixos-25.05/latest-nixos-minimal-x86_64-linux.iso
+
+qm set <vmid> --ide2 local:iso/latest-nixos-minimal-x86_64-linux.iso,media=cdrom
+qm set <vmid> --boot 'order=ide2;scsi0'
+qm start <vmid>
+```
+
+Then in the guest's console — the noVNC console of the web interface, since no
+serial console is configured on the installer image:
+
+```sh
+sudo -i
+passwd                                       # nixos-anywhere authenticates as root
+ip -br link                                  # the interface, usually ens18
+ip addr add <declared address>/24 dev ens18
+ip route add default via <gateway of its zone>
+```
+
+The address is not negotiated. These zones carry no DHCP server, and the
+address of each guest is a parameter: give the installer the address declared
+for that guest in `parameters.nix`, so that the machine keeps answering at the
+same place once it is installed and configures that address itself.
+
+```sh
+export SSHPASS=<the password just set>       # several SSH sessions, asked once
+nixos-anywhere --env-password --flake .#<host> root@<declared address>
+```
+
+`No route to host` at this point means nothing answers at that address:
+the guest is not started, it did not boot the image, or it has no address on
+that VLAN. `Connection refused` means the opposite — something is there and
+the port is closed, which on this node is worth checking against the Proxmox
+firewall, since every interface is created with `firewall=1` and a
+default-deny input policy stops SSH before the guest sees it
+(`pve-firewall status`).
+
+Once installed, drop the installer media so the guest boots from its own disk:
+
+```sh
+qm set <vmid> --delete ide2 --boot 'order=scsi0'
+```
+
+Protection refuses that removal — the guests are created with `--protection 1`.
+Clear it, remove the drive, and set it back; `verify` reports the guest as
+drifted for as long as it stays off.
+
+#### Registering the host keys
 
 Inside the development shell again, for `ssh-to-age` and `sops`:
 
 ```sh
-nixos-anywhere --flake .#<host> root@<address>
 ssh <address> "cat /etc/ssh/ssh_host_ed25519_key.pub" | ssh-to-age
 "${EDITOR:-vi}" .sops.yaml                   # register the key
 sops updatekeys secrets/<host>.yaml
