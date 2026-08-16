@@ -28,6 +28,26 @@ the agent runtime and the egress broker. They are separate identities on
 purpose — the broker holds the only policy able to read an inference
 credential, and the runtime must not inherit it.
 
+The identity is named after the role that holds it, not after the software, so
+the pair above is the agentic guest's and no other guest's. Each file carries
+exactly these keys, and a file carrying a different set produces a guest whose
+agent has no credential to present:
+
+| File | Keys |
+| --- | --- |
+| `hrm-edge.yaml` | `openbao.ingress.role_id`, `openbao.ingress.secret_id`, `authelia.users_file` |
+| `hrm-app.yaml` | `openbao.hermes.{role_id,secret_id}`, `openbao.broker.{role_id,secret_id}` |
+| `hrm-mem.yaml` | `openbao.memory.role_id`, `openbao.memory.secret_id` |
+| `hrm-sec.yaml` | `openbao.eval.role_id`, `openbao.eval.secret_id` |
+
+The table is derived from the guests rather than maintained beside them, so it
+can be re-read from the configuration instead of trusted:
+
+```sh
+nix eval --apply builtins.attrNames \
+  .#nixosConfigurations.<host>.config.sops.secrets
+```
+
 The ingress guest carries one additional key. The identity provider's user
 file holds password digests, and it cannot come from the secret store for the
 same reason the bootstrap credential cannot: the provider must be able to
