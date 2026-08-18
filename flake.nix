@@ -146,6 +146,20 @@
               url = "github:Daxer97/hermes-agent";
         '';
 
+      # The runtime's build backend refuses to produce a wheel unless it is
+      # told which build this is. Upstream distributes through its installer,
+      # its image or its flake, and the refusal exists to stop a plain
+      # `pip wheel` — its own message says the flag is set by the Nix
+      # derivation and that the error should not fire under uv2nix. Building
+      # the environment here is that case, and nothing else was going to set
+      # it: the closure of the agentic guest is this environment.
+      hermesBuildFlag = _final: prev:
+        lib.optionalAttrs (prev ? hermes-agent) {
+          hermes-agent = prev.hermes-agent.overrideAttrs (old: {
+            env = (old.env or { }) // { HERMES_NIX_BUILD = "1"; };
+          });
+        };
+
       mkVenv = name: root:
         let
           workspace = uv2nix.lib.workspace.loadWorkspace {
@@ -156,6 +170,7 @@
           pySet = base.overrideScope (lib.composeManyExtensions [
             build-systems.overlays.default
             overlay
+            hermesBuildFlag
           ]);
         in
         pySet.mkVirtualEnv name workspace.deps.default;

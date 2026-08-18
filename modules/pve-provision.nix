@@ -223,6 +223,10 @@ let
       check_credentials ${cfg.guests.${role}.hostName}
     '';
 
+  hostNames = lib.concatMapStringsSep " | "
+    (role: cfg.guests.${role}.hostName)
+    byBootOrder;
+
   # The counterpart of createGuest: every field it sets, read back and
   # compared. The comparison is written against what qm config reports rather
   # than against the command line that produced it — Proxmox normalises both
@@ -291,7 +295,7 @@ let
         hermes-provision-guests preflight         check the node, create nothing
         hermes-provision-guests create            create the guests, boot the installer on them
         hermes-provision-guests bootstrap         boot the installer on guests that exist
-        hermes-provision-guests install           run nixos-anywhere over every guest, in order
+        hermes-provision-guests install [<host>]  run nixos-anywhere, in start order
         hermes-provision-guests eject             remove the installation media after installing
         hermes-provision-guests verify            compare the guests with the inventory
         hermes-provision-guests fsync             measure the fsync rate of the memory pool
@@ -307,7 +311,11 @@ let
 
       install runs from the repository, which is where the flake it deploys
       is: nixos-anywhere is not part of this script, and it is expected on
-      PATH — `nix shell github:nix-community/nixos-anywhere -c ...`.
+      PATH — `nix shell github:nix-community/nixos-anywhere -c ...`. With no
+      argument it installs the guests that are not installed yet; naming one
+      installs that one, whatever state it is in. The distinction is not a
+      convenience: the installation begins by wiping the partition table, so
+      repeating it over a guest that is already installed destroys it.
 
       fsync is separate because it writes to the pool and takes seconds; the
       rest read the node and nothing else.
@@ -335,6 +343,10 @@ let
       # image: a guest that already existed may be installed, and starting it
       # on the installer is not what 'create' was asked to do.
       CREATED=()
+
+      # Guests named on the command line of install. Empty means every guest
+      # that is not installed yet.
+      SELECTED=()
       BACKUP_TARGET="${cfg.site.backupTarget}"
       BACKUP_MOUNT="${cfg.site.backupMountPoint}"
       FSYNC_MINIMUM=${toString cfg.site.storage.fsyncMinimum}
@@ -980,12 +992,56 @@ let
         fi
       }
 
+      valid_host() {
+        case "$1" in
+          ${hostNames}) return 0 ;;
+          *) return 1 ;;
+        esac
+      }
+
+      selected() {
+        local host="$1" want
+        for want in ''${SELECTED[@]+"''${SELECTED[@]}"}; do
+          if [ "$want" = "$host" ]; then
+            return 0
+          fi
+        done
+        return 1
+      }
+
+      # A guest reports its own name once it is installed and the image's name
+      # until then, which is the one fact that distinguishes the two without
+      # reading a disk. It matters because installing is not a repeatable
+      # operation the way creating is: disko wipes the partition table before
+      # anything else, so a second run over a guest that is already installed
+      # destroys it, and it would do so in the middle of a run aimed at the
+      # guest after it.
+      guest_installed() {
+        local host="$1" address="$2" reported
+
+        reported=$(ssh -o BatchMode=yes -o ConnectTimeout=5 \
+          -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+          "root@$address" hostname 2>/dev/null || true)
+
+        [ "$reported" = "$host" ]
+      }
+
       install_guest() {
         local id="$1" host="$2" address="$3"
 
         if ! vm_exists "$id"; then
           echo "$id $host does not exist. Run create first." >&2
           exit 1
+        fi
+
+        if [ "''${#SELECTED[@]}" -gt 0 ]; then
+          if ! selected "$host"; then
+            return 0
+          fi
+        elif guest_installed "$host" "$address"; then
+          echo "$id $host: installed already, left alone. To install it again,"
+          echo "name it: hermes-provision-guests install $host"
+          return 0
         fi
 
         echo
@@ -1048,6 +1104,16 @@ let
       # credentials.
       cmd_install() {
         read_node
+
+        local host
+        SELECTED=("$@")
+        for host in ''${SELECTED[@]+"''${SELECTED[@]}"}; do
+          if ! valid_host "$host"; then
+            echo "'$host' is not a guest of this inventory. It is one of:" >&2
+            echo "  ${hostNames}" >&2
+            exit 2
+          fi
+        done
 
         if ! command -v nixos-anywhere >/dev/null 2>&1; then
           echo "nixos-anywhere is not on PATH. It is not part of this script:" >&2
@@ -1202,7 +1268,7 @@ let
         preflight) cmd_preflight ;;
         create)    cmd_create ;;
         bootstrap) cmd_bootstrap ;;
-        install)   cmd_install ;;
+        install)   shift; cmd_install "$@" ;;
         eject)     cmd_eject ;;
         verify)    cmd_verify ;;
         fsync)     cmd_fsync ;;
