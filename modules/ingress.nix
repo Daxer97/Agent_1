@@ -107,17 +107,31 @@ in
         # and account enumeration.
         limit_req_zone $binary_remote_addr zone=authzone:10m rate=${cfg.ingress.rateLimit.auth};
 
+        # Both maps read a file that does not exist where this configuration
+        # is built. The trailing wildcard is what makes that legal: nginx
+        # treats an include that matches no file as empty, and an include
+        # naming a missing file as a fatal error — and the configuration is
+        # parsed once in the sandbox, where neither file can be present,
+        # before it is ever parsed on the guest.
+        #
+        # Nothing is given up by it, because neither file is optional in
+        # service and neither is guarded by nginx: the first is written by
+        # environment.etc and exists from activation, and the second is
+        # rendered by the agent that this unit both requires and starts
+        # after. A missing file at run time is a failure of that ordering,
+        # which nginx is not the thing that would catch.
+
         # 1) authenticated identity to profile. An explicit map, generated
         #    from the same declaration that provisions the profiles.
         map $authelia_email $hermes_profile {
           default "";
-          include ${cfg.ingress.identityMapPath};
+          include ${cfg.ingress.identityMapPath}*;
         }
 
         # 2) profile to bearer. Rendered by the secret store agent in tmpfs.
         map $hermes_profile $profile_bearer {
           default "";
-          include ${runtime}/profile-bearers.conf;
+          include ${runtime}/profile-bearers.conf*;
         }
 
         proxy_read_timeout    ${cfg.ingress.timeouts.proxyRead};

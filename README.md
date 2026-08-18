@@ -554,6 +554,12 @@ state it is in. The distinction is not a convenience: the installation begins
 by wiping the partition table, so an unqualified second run would destroy every
 guest the first run had installed.
 
+A guest whose closure does not build stops the run before it is touched, and
+the message names the derivation rather than the guest. `nix log <drv>` is
+where the cause is: the last lines of a failed build are printed by the
+builder, and for a configuration file that is validated at build time those
+last lines are the file, not the complaint about it.
+
 **The activation of a newly installed guest reports a decryption failure, and
 it is not one.**
 
