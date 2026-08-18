@@ -44,6 +44,7 @@ let
       address = [ "${guest.address}/${toString (prefixLength guest.zone)}" ];
       networkConfig = {
         Gateway = (zoneOf guest.zone).gateway;
+        DNS = hermes.network.nameservers;
         LinkLocalAddressing = "no";
       };
       linkConfig.RequiredForOnline = "routable";
@@ -73,6 +74,14 @@ in
     networking.useDHCP = lib.mkForce false;
     networking.useNetworkd = true;
     networking.wireless.enable = lib.mkForce false;
+
+    # An address and a gateway are not connectivity. The installation resolves
+    # names — the binary cache before anything else — and a guest that can
+    # route but not resolve fails at that, in a message about a host name,
+    # after everything about the machine looked correct. Declared in both
+    # places on purpose: networkd carries it when the resolver is systemd's,
+    # and resolvconf writes it when it is not.
+    networking.nameservers = hermes.network.nameservers;
 
     systemd.network.networks = lib.listToAttrs (lib.imap0 networkOf byBootOrder);
 

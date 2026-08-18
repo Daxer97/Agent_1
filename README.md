@@ -518,6 +518,20 @@ and `preflight` refuses to create anything while the image is missing.
 answer. What it leaves behind is not four virtual machines: it is four
 machines that can be installed onto.
 
+Rebuilding the image later — after a change to any parameter it carries, which
+is the addresses, the hardware addresses, the resolver and the administrative
+keys — means stopping the guests that have it attached first. QEMU holds the
+file open while a guest is running, and overwriting it in place corrupts what
+that guest is reading:
+
+```sh
+qm stop <vmid>                               # every guest still on the image
+nix build .#installer-iso
+install -m 0644 result/iso/hermes-installer.iso \
+  "$(pvesm path local:iso/hermes-installer.iso)"
+nix run .#provision-guests -- bootstrap      # starts them again and waits
+```
+
 #### Installing
 
 ```sh
@@ -532,7 +546,17 @@ repository, with the host key of the image neither recorded nor trusted: it is
 generated at every boot and belongs to a machine that has no identity yet. The
 identity that matters is the one registered below, from the installed system.
 
-Two failures are worth telling apart here. `No route to host` means nothing
+`Could not resolve host` during the installation is a third: the guest routes
+but does not resolve. The image carries `hermes.network.nameservers`, so this
+means either that the resolver is unreachable from that zone — the guests reach
+it through the zone gateway, which is not the path the node uses — or that the
+image predates the parameter. Read it from the guest itself:
+
+```sh
+ssh root@<address> "cat /etc/resolv.conf; getent hosts cache.nixos.org"
+```
+
+Two further failures are worth telling apart. `No route to host` means nothing
 answers at that address — the guest is not running, did not boot the image, or
 came up without an address, which happens when the hardware address of `net0`
 is not the declared one (`verify` reports that). `Connection refused` is the
