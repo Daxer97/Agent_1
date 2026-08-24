@@ -641,15 +641,42 @@ is what protection is for.
 Inside the development shell again, for `ssh-to-age` and `sops`:
 
 ```sh
-ssh <address> "cat /etc/ssh/ssh_host_ed25519_key.pub" | ssh-to-age
-"${EDITOR:-vi}" .sops.yaml                   # register the key
+ssh root@<address> "cat /etc/ssh/ssh_host_ed25519_key.pub" | ssh-to-age
+"${EDITOR:-vi}" .sops.yaml                   # register the key for that guest
 sops updatekeys secrets/<host>.yaml
-ssh <address> "sops -d /etc/nixos/secrets/<host>.yaml >/dev/null && echo OK"
+git add .sops.yaml secrets/<host>.yaml
+
+# Built here and pushed: the guests deny outbound traffic and have no build
+# path of their own.
+nixos-rebuild switch --flake .#<host> --target-host root@<address>
+ssh root@<address> "ls -l /run/secrets/"
 ```
 
-Run the decryption test **from the guest**, because that is where decryption
-happens at activation. A successful decryption of a file that does not belong
-to that guest means the rules are too broad — correct them before continuing.
+The decryption test is the rebuild, and it is not a formality: it is the same
+activation that failed during the installation, failing for the reason that
+made it fail — the file was encrypted to the operator alone and the guest's
+key was not yet a recipient. Once it is, the secrets appear under
+`/run/secrets`. If they do not, `sops-install-secrets` names the file and the
+key it could not use, in the output of the rebuild.
+
+It is not `sops -d` on the guest. `sops` is not installed there and never
+needs to be: what reaches a guest is its closure, the credential file inside
+it is a store path, and the component that decrypts it is the activation. The
+repository is not on the guest either.
+
+The other half of the property — that a guest cannot decrypt another guest's
+file — is a property of the files, so it is checked where the files are. Each
+must name exactly two recipients, the operator and the one guest it belongs
+to:
+
+```sh
+grep -c 'recipient:' secrets/*.yaml          # 2 each, once every key is registered
+grep -H 'recipient:' secrets/*.yaml          # and the second one is that guest's
+```
+
+A file naming a third is a file two guests can read, which defeats the
+separation of policies before any policy is consulted — and it does so
+silently, because the deployment succeeds either way.
 
 Snapshot:
 
