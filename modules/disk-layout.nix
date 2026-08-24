@@ -26,12 +26,26 @@
 #     here and forfeit that.
 #   * The root volume is attached as scsi0, so it is hermes.nix.rootDevice.
 
-{ config, lib, ... }:
+{ config, lib, modulesPath, ... }:
 
 let
   device = config.hermes.nix.rootDevice;
 in
 {
+  # The guests are virtual machines and their root volume is attached to a
+  # virtio-scsi controller, so the initrd has to carry the driver for it.
+  # Without it stage 1 comes up, loads dm_mod, runs udev, and then waits for
+  # /dev/disk/by-partlabel/disk-root-root to appear until it times out: the
+  # partition is there, the disk it is on is not, because nothing in the
+  # initrd can see the controller. The installation image never shows this —
+  # it carries every driver — so the failure appears at the first boot from
+  # the disk, after an installation that reported success.
+  imports = [ (modulesPath + "/profiles/qemu-guest.nix") ];
+
+  # sd_mod on top of the profile: it brings the virtio drivers, and this is
+  # what turns the SCSI device the controller exposes into /dev/sda.
+  boot.initrd.availableKernelModules = [ "virtio_scsi" "sd_mod" ];
+
   disko.devices.disk.root = {
     inherit device;
     type = "disk";

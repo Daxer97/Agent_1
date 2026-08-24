@@ -554,6 +554,20 @@ state it is in. The distinction is not a convenience: the installation begins
 by wiping the partition table, so an unqualified second run would destroy every
 guest the first run had installed.
 
+**A guest never answers a ping, at any point after it is installed.** The
+firewall drops ICMP echo (`allowPing = false`) and drops rather than rejects
+(`rejectPackets = false`), because a rejection confirms that the host exists —
+which is what the reachability test from the user network is meant to
+disprove. Reachability is tested with SSH, and SSH is admitted from the
+management range alone:
+
+```sh
+ssh root@<address> true && echo reachable
+```
+
+A guest that answers neither is either not running or not booting, and the
+console is where that is visible.
+
 A guest whose closure does not build stops the run before it is touched, and
 the message names the derivation rather than the guest. `nix log <drv>` is
 where the cause is: the last lines of a failed build are printed by the
@@ -592,6 +606,22 @@ opposite: something is there and the port is closed, which on this node is
 worth checking against the Proxmox firewall, since every interface is created
 with `firewall=1` and a default-deny input policy stops SSH before the guest
 sees it (`pve-firewall status`).
+
+Reinstalling one is `bootstrap` and `install` with the guest named:
+
+```sh
+nix run .#provision-guests -- bootstrap hrm-edge
+nix shell github:nix-community/nixos-anywhere \
+  -c nix run .#provision-guests -- install hrm-edge
+```
+
+Naming it is what makes the difference in both. `bootstrap` normally leaves
+the disk first in the boot order and the image second, which is what a guest
+that is already installed should do; naming one puts the image first and
+restarts it, because a guest being reinstalled has a bootloader on its disk
+and would otherwise boot the system that is being replaced — including a
+system that does not boot. `install` skips guests that are installed unless
+they are named.
 
 Once every guest is installed:
 

@@ -192,10 +192,8 @@ let
       id = toString guest.vmid;
     in
     ''
-      if vm_exists ${id}; then
+      if bootstrap_wanted ${id} ${guest.hostName}; then
         bootstrap_guest ${id} ${guest.hostName} ${guest.address}
-      else
-        problem "${id} ${guest.hostName} does not exist: run create first."
       fi
     '';
 
@@ -294,7 +292,7 @@ let
       Usage:
         hermes-provision-guests preflight         check the node, create nothing
         hermes-provision-guests create            create the guests, boot the installer on them
-        hermes-provision-guests bootstrap         boot the installer on guests that exist
+        hermes-provision-guests bootstrap [<host>] boot the installer on guests that exist
         hermes-provision-guests install [<host>]  run nixos-anywhere, in start order
         hermes-provision-guests eject             remove the installation media after installing
         hermes-provision-guests verify            compare the guests with the inventory
@@ -308,6 +306,11 @@ let
       by running create again. Each guest it creates is then started on the
       installation image built by this flake and waited for, so that what
       create leaves behind is a machine that answers on its declared address.
+
+      bootstrap with no argument boots each guest the way a guest boots: its
+      own disk first, the image only if there is nothing on it. Naming one
+      boots the image whatever is on the disk, which is what re-installing a
+      guest needs — including one whose installed system does not boot.
 
       install runs from the repository, which is where the flake it deploys
       is: nixos-anywhere is not part of this script, and it is expected on
@@ -891,14 +894,24 @@ let
       # the sequence needs no console — the image carries the administrative
       # keys and recognises each guest by the hardware address the inventory
       # assigns it.
+      bootstrap_wanted() {
+        local id="$1" host="$2"
+
+        if [ "''${#SELECTED[@]}" -gt 0 ] && ! selected "$host"; then
+          return 1
+        fi
+
+        if ! vm_exists "$id"; then
+          problem "$id $host does not exist: run create first."
+          return 1
+        fi
+
+        return 0
+      }
+
       bootstrap_guest() {
         local id="$1" host="$2" address="$3"
-
-        load_guest "$id"
-
-        if [ "$(cfg_value ide2)" != "$INSTALLER_VOLUME,media=cdrom" ]; then
-          qm set "$id" --ide2 "$INSTALLER_VOLUME,media=cdrom"
-        fi
+        local order="order=scsi0;ide2"
 
         # Disk first, image second. An uninstalled volume carries no boot
         # signature and the firmware falls through to the image; once
@@ -906,11 +919,36 @@ let
         # installed system — including at the reboot that ends the
         # installation, which the reverse order would send back to the
         # installer for as long as the media stayed attached.
-        if [ "$(cfg_value boot)" != "order=scsi0;ide2" ]; then
-          qm set "$id" --boot 'order=scsi0;ide2'
+        #
+        # Naming a guest reverses it, because naming one means installing
+        # onto it again. By then its disk holds a bootloader, and disk-first
+        # boots whatever is on it — including a system that does not boot,
+        # which is the case where this is needed. eject puts the order back
+        # to the disk alone.
+        if [ "''${#SELECTED[@]}" -gt 0 ]; then
+          order="order=ide2;scsi0"
         fi
 
-        if [ "$(qm status "$id" | awk '{ print $2 }')" != "running" ]; then
+        load_guest "$id"
+
+        if [ "$(cfg_value ide2)" != "$INSTALLER_VOLUME,media=cdrom" ]; then
+          qm set "$id" --ide2 "$INSTALLER_VOLUME,media=cdrom"
+        fi
+
+        if [ "$(cfg_value boot)" != "$order" ]; then
+          qm set "$id" --boot "$order"
+        fi
+
+        # Started already is not the same as started on the image. A guest
+        # whose boot order has just been changed is running the thing the old
+        # one selected, so the change reaches it at the next boot and not at
+        # this one.
+        if [ "$(qm status "$id" | awk '{ print $2 }')" = "running" ]; then
+          if [ "''${#SELECTED[@]}" -gt 0 ]; then
+            qm stop "$id"
+            qm start "$id"
+          fi
+        else
           qm start "$id"
         fi
 
@@ -951,6 +989,16 @@ let
       cmd_bootstrap() {
         read_node
         PROBLEMS=0
+
+        local host
+        SELECTED=("$@")
+        for host in ''${SELECTED[@]+"''${SELECTED[@]}"}; do
+          if ! valid_host "$host"; then
+            echo "'$host' is not a guest of this inventory. It is one of:" >&2
+            echo "  ${hostNames}" >&2
+            exit 2
+          fi
+        done
 
         ${lib.concatStrings (map bootstrapGuest byBootOrder)}
 
@@ -1267,7 +1315,7 @@ let
       case "''${1:-}" in
         preflight) cmd_preflight ;;
         create)    cmd_create ;;
-        bootstrap) cmd_bootstrap ;;
+        bootstrap) shift; cmd_bootstrap "$@" ;;
         install)   shift; cmd_install "$@" ;;
         eject)     cmd_eject ;;
         verify)    cmd_verify ;;
