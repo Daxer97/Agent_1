@@ -377,7 +377,7 @@
       # Left null the agents use the system trust store, which the self-signed
       # certificate is not in — and the failure is a TLS error that does not
       # mention a certificate.
-      caCertificate = "./config/openbao/cert.pem"
+      caCertificate = ./config/openbao/cert.pem;
 
       # On local-lvm, deliberately not on the pool of the memory guest and on
       # a filesystem separate from the observability volume: documentary
