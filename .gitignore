@@ -41,6 +41,14 @@ secrets/**/*.plain.yaml
 *.pfx
 !**/*.pub
 
+# The one exception, and it is not key material: the public half of the
+# certificate the secret store issues itself. It is what every agent verifies
+# the listener against, so it is declared as a path in parameters.nix — and a
+# flake is evaluated from the tracked tree, which means an untracked copy is
+# not there at all. The private half stays on the guest, under the dynamic
+# user, and is matched by the rule above.
+!config/openbao/cert.pem
+
 # ---------------------------------------------------------------------------
 # Proxmox and backup artefacts
 #

@@ -273,7 +273,7 @@ therefore cannot reach the binary cache. Build on a build host and push the
 closures:
 
 ```sh
-nixos-rebuild switch --flake .#<host> --target-host root@<address> --build-host localhost
+nixos-rebuild switch --flake ".#$HOST" --target-host "root@$ADDR" --build-host localhost
 ```
 
 This is the option consistent with the design rather than a workaround: a
@@ -286,19 +286,56 @@ guest running untrusted code has no need of a build toolchain.
 Ten phases. Each ends with a snapshot, which is the rollback point of the one
 that follows. Commands run from the repository root unless stated otherwise.
 
+### The names and addresses these commands use
+
+Every phase after the first addresses guests by name and by address, and both
+are parameters. They are read once, into the shell that runs the phase, rather
+than transcribed into each command:
+
+```sh
+EDGE=hrm-edge ; APP=hrm-app ; MEM=hrm-mem ; SEC=hrm-sec
+EDGE_ADDR=$(nix eval --raw ".#nixosConfigurations.$EDGE.config.hermes.guests.ingress.address")
+APP_ADDR=$(nix eval --raw ".#nixosConfigurations.$APP.config.hermes.guests.agent.address")
+MEM_ADDR=$(nix eval --raw ".#nixosConfigurations.$MEM.config.hermes.guests.memory.address")
+SEC_ADDR=$(nix eval --raw ".#nixosConfigurations.$SEC.config.hermes.secretStore.address")
+FQDN=$(nix eval --raw ".#nixosConfigurations.$EDGE.config.hermes.ingress.publicFqdn")
+```
+
+The four names are the attributes of `nixosConfigurations`, so `.#$MEM` is
+what `nixos-rebuild` is given. Observability has no guest of its own — it is
+an alias of the secret store's — which is why its phase rebuilds `$SEC`.
+
+F-02 works through the guests one at a time rather than addressing a
+particular one, so it uses a pair that is re-pointed at each guest in turn:
+
+```sh
+HOST=hrm-sec ; ADDR=$SEC_ADDR        # then hrm-mem, hrm-app, hrm-edge
+```
+
+**Angle brackets are not placeholders to a shell.** `<name>` is a redirection
+from a file called `name`. A block containing one does not stop at the
+unfilled value: bash reports `syntax error near unexpected token 'newline'`
+for that line and then runs every line after it, so the commands that *are*
+complete execute against whatever the incomplete ones left set. Nothing below
+carries brackets for that reason — the blocks are meant to be pasted, and a
+value that is not a parameter is named in the prose beside them.
+
 ### F-01 — Environment verification
 
 Installs nothing. It establishes that the assumptions the sizing rests on are
-true, before any node capacity is consumed.
+true, before any node capacity is consumed. `$BRIDGE` is the bridge the guests
+attach to — `hermes.network.bridge`, `vmbr0` as shipped:
 
 ```sh
+BRIDGE=$(nix eval --raw .#nixosConfigurations.hrm-sec.config.hermes.network.bridge)
+
 pveversion -v                                   # hypervisor version
 lscpu | head -20                                # cores available
 grep -Eoc "(vmx|svm)" /proc/cpuinfo             # full virtualisation: must be > 0
 free -g                                         # memory, the binding constraint
 pvesm status                                    # storage pools and free space
 pveperf                                         # fsync rate on the memory pool
-cat /sys/class/net/<bridge>/bridge/vlan_filtering   # expected: 1
+cat "/sys/class/net/$BRIDGE/bridge/vlan_filtering"   # expected: 1
 qm list ; pct list                              # VMIDs already in use
 ```
 
@@ -468,17 +505,25 @@ is created. While no volume refers to the pool the rename is one line; after
 that the cost moves to every reference in the flake and in every management
 command.
 
+`$CURRENT_ID` is what the pool is called on the node today, `$NEW_ID` what
+the flake calls it — `hermes.site.storage.memory` — and `$POOL_PATH` the
+directory it already serves, which `pvesm status` and the stanza below it
+report:
+
 ```sh
+CURRENT_ID=nvme-mem-old ; POOL_PATH=/mnt/nvme-mem
+NEW_ID=$(nix eval --raw .#nixosConfigurations.hrm-mem.config.hermes.site.storage.memory)
+
 pvesm status                                    # what the node has today
-awk '/^dir: <current-id>/,/^$/' /etc/pve/storage.cfg   # its path and contents
+awk "/^dir: $CURRENT_ID\$/,/^\$/" /etc/pve/storage.cfg   # its path and contents
 
 # Nothing has been allocated on it yet, so re-declaring it under the new
 # identifier loses no data — the directory is untouched. Match the type and
 # the content list to what the pool actually is.
-pvesm remove <current-id>
-pvesm add dir <new-id> --path <path> --content images
+pvesm remove "$CURRENT_ID"
+pvesm add dir "$NEW_ID" --path "$POOL_PATH" --content images
 
-pvesm status --content images                   # <new-id>: listed and active
+pvesm status --content images                   # the new identifier, listed and active
 ```
 
 The pool holding the memory guest is directory-backed on purpose, because its
@@ -525,7 +570,7 @@ file open while a guest is running, and overwriting it in place corrupts what
 that guest is reading:
 
 ```sh
-qm stop <vmid>                               # every guest still on the image
+for VMID in $(qm list | awk '$2 ~ /^hrm-/ { print $1 }'); do qm stop "$VMID"; done
 nix build .#installer-iso
 install -m 0644 result/iso/hermes-installer.iso \
   "$(pvesm path local:iso/hermes-installer.iso)"
@@ -562,7 +607,7 @@ disprove. Reachability is tested with SSH, and SSH is admitted from the
 management range alone:
 
 ```sh
-ssh root@<address> true && echo reachable
+ssh "root@$ADDR" true && echo reachable
 ```
 
 A guest that answers neither is either not running or not booting, and the
@@ -595,7 +640,7 @@ it through the zone gateway, which is not the path the node uses — or that the
 image predates the parameter. Read it from the guest itself:
 
 ```sh
-ssh root@<address> "cat /etc/resolv.conf; getent hosts cache.nixos.org"
+ssh "root@$ADDR" "cat /etc/resolv.conf; getent hosts cache.nixos.org"
 ```
 
 Two further failures are worth telling apart. `No route to host` means nothing
@@ -641,16 +686,16 @@ is what protection is for.
 Inside the development shell again, for `ssh-to-age` and `sops`:
 
 ```sh
-ssh root@<address> "cat /etc/ssh/ssh_host_ed25519_key.pub" | ssh-to-age
+ssh "root@$ADDR" "cat /etc/ssh/ssh_host_ed25519_key.pub" | ssh-to-age
 "${EDITOR:-vi}" .sops.yaml                   # register the key for that guest
-sops updatekeys secrets/<host>.yaml
-git add .sops.yaml secrets/<host>.yaml
+sops updatekeys "secrets/$HOST.yaml"
+git add .sops.yaml "secrets/$HOST.yaml"
 
 # Built here and pushed: the guests deny outbound traffic and have no build
 # path of their own. nixos-rebuild comes from the development shell — the
 # node runs Proxmox, not NixOS, and does not have it otherwise.
-nixos-rebuild switch --flake .#<host> --target-host root@<address>
-ssh root@<address> "ls -l /run/secrets/"
+nixos-rebuild switch --flake ".#$HOST" --target-host "root@$ADDR"
+ssh "root@$ADDR" "ls -l /run/secrets/"
 ```
 
 Without the development shell, the same thing without that command: build the
@@ -659,9 +704,9 @@ what `nixos-rebuild` does, and it is worth knowing because it is also the way
 back when a rebuild leaves a guest unreachable.
 
 ```sh
-OUT=$(nix build --print-out-paths .#nixosConfigurations.<host>.config.system.build.toplevel)
-nix copy --to ssh://root@<address> "$OUT"
-ssh root@<address> "nix-env -p /nix/var/nix/profiles/system --set $OUT \
+OUT=$(nix build --print-out-paths ".#nixosConfigurations.$HOST.config.system.build.toplevel")
+nix copy --to "ssh://root@$ADDR" "$OUT"
+ssh "root@$ADDR" "nix-env -p /nix/var/nix/profiles/system --set $OUT \
   && $OUT/bin/switch-to-configuration switch"
 ```
 
@@ -737,6 +782,48 @@ With the parameters as they stand, that is `10.102.0.14`, mount `hermes`,
 audit path `/var/log/openbao`, three shares of which two are needed, and the
 database role `hindsight`.
 
+An SSH session does not inherit them, and every block below that runs on a
+guest uses them. So the node prints the header those sessions open with, with
+the values already substituted:
+
+```sh
+cat <<EOF
+export BAO_ADDR="https://$SEC_ADDR:8200"
+export MOUNT=$MOUNT
+export AUDIT=$AUDIT
+export SHARES=$SHARES
+export THRESHOLD=$THRESHOLD
+export DB_USER=$DB_USER
+EOF
+```
+
+Paste its output as the first thing in each guest session. Nothing below is
+typed from the tables: the names are the parameters, and the shell holds them.
+
+`BAO_CACERT` is the one value that differs by guest, because the certificate
+is in a different place on each. On `hrm-sec` the unit publishes it, so the
+session adds:
+
+```sh
+export BAO_CACERT=/run/openbao/cert.pem
+```
+
+On `hrm-app` it arrives in the closure, at the path the parameter names — so
+the node reads that path out of the configuration rather than the operator
+guessing where it landed:
+
+```sh
+nix eval --raw .#nixosConfigurations.hrm-app.config.hermes.secretStore.caCertificate
+```
+
+That command fails while the parameter is still `null`, and the failure is
+the accurate one: the gate cannot run on a guest whose agent has nothing to
+verify the listener against.
+
+The blocks below are pasted, not transcribed — see the note on angle brackets
+at the head of the installation section for what a block that still carries
+one does to a shell.
+
 #### The listener's certificate
 
 TLS is mandatory on the store, and the certificate is not placed by hand: the
@@ -763,6 +850,11 @@ git add config/openbao/cert.pem
 "${EDITOR:-vi}" parameters.nix       # secretStore.caCertificate = ./config/openbao/cert.pem
 ```
 
+`.gitignore` excludes `*.pem` and re-includes this one path by name. The `git
+add` is not a formality: a flake is evaluated from the tracked tree, so an
+untracked certificate is not there at all, and the parameter pointing at it
+fails to evaluate.
+
 It is public material, so the Nix store is the right place for it: from there
 it travels in the closure of each guest like everything else they are built
 from. Left null, the agents verify against the system trust store, which this
@@ -775,21 +867,49 @@ keeps whatever it finds there.
 
 #### Initialising the store
 
-On `hrm-sec`. `bao` is the CLI of the service and is not necessarily on the
-administrative PATH; the first line finds it in the closure of the unit that
-is already running it:
+On `hrm-sec`, after the header. The service installs its own CLI, so `bao` is
+already on the PATH; the fallback finds it in the closure of the running unit
+if a future revision stops installing it:
 
 ```sh
 command -v bao || export PATH="$(dirname "$(ls /nix/store/*-openbao-*/bin/bao | head -1)"):$PATH"
+bao status                                   # Initialized false, Sealed true
+```
 
-export BAO_ADDR="https://<secrets-address>:8200"
-export BAO_CACERT=/run/openbao/cert.pem
+`status` exits non-zero while the store is sealed — that is its way of
+reporting the seal, not a failure of the command. What it must say before
+anything below is run is `Initialized false`. Anything else means the store
+has been initialised already, and `init` would be refused: recover the
+existing root token rather than running it again.
 
-bao operator init -key-shares=<shares> -key-threshold=<threshold>
+**Three commands here read from the terminal, so they are run one at a time,
+not pasted together.** A paste is a queue of lines: whatever follows an
+interactive command is consumed as its answer, and the answer to `unseal` is
+an unseal key. Run these individually:
+
+```sh
+bao operator init -key-shares="$SHARES" -key-threshold="$THRESHOLD"
+```
+
+```sh
 bao operator unseal                          # repeat until the threshold is met
-export BAO_TOKEN=<the root token init printed>
+```
 
-bao secrets enable -path=<mount> kv-v2
+```sh
+read -rsp 'root token: ' BAO_TOKEN && export BAO_TOKEN && echo
+```
+
+`init` prints the unseal shares and the root token once and never again. The
+shares do not stay on this guest — holding them there is equivalent to not
+having them — and the root token is exported for the rest of this phase only.
+Reading it with `read -rs` rather than assigning it keeps it out of the shell
+history and off the command line, which is the same reason every value below
+arrives on stdin.
+
+The rest of the phase is non-interactive and can be pasted as one block:
+
+```sh
+bao secrets enable -path="$MOUNT" kv-v2
 bao auth enable approle
 
 for role in broker hermes memory ingress eval; do
@@ -798,85 +918,181 @@ for role in broker hermes memory ingress eval; do
     secret_id_ttl=0 bind_secret_id=true
 done
 
-bao audit enable file file_path=<audit-path>/openbao-audit.log
+bao audit enable file file_path="$AUDIT/openbao-audit.log"
 ```
 
-`init` prints the unseal shares and the root token once and never again. The
-shares do not stay on this guest — holding them there is equivalent to not
-having them — and the root token is exported for the rest of this phase only.
+The policies are built where the flake is and written where the store is, so
+they have to cross. They are public — they are in this repository — so they
+travel as files. The root token does not travel at all: it stays in the shell
+on `hrm-sec`, which is why the writing is done there and not over `ssh` with
+the token on the command line, where the process table of both machines would
+have it.
 
-The policies are built where the flake is and written where the store is.
-`bao policy write` reads from standard input, which is what joins the two.
 From the node:
 
 ```sh
 POLICIES=$(nix build .#baoPolicies --print-out-paths)
+ssh "root@$SEC_ADDR" "mkdir -p /tmp/hermes-policies"
+scp "$POLICIES"/*.hcl "$POLICIES/expected-paths.txt" \
+  "root@$SEC_ADDR:/tmp/hermes-policies/"
+```
+
+Then on `hrm-sec`, in the session that holds `BAO_TOKEN`:
+
+```sh
 for policy in broker hermes memory ingress eval; do
-  ssh root@"$SEC_ADDR" "BAO_ADDR=https://$SEC_ADDR:8200 \
-    BAO_CACERT=/run/openbao/cert.pem BAO_TOKEN=$BAO_TOKEN \
-    bao policy write $policy -" < "$POLICIES/$policy.hcl"
+  bao policy write "$policy" "/tmp/hermes-policies/$policy.hcl"
 done
+bao policy list
 ```
 
 Populate every path, on `hrm-sec`. Values arrive on stdin, never as command
 arguments — arguments are visible in the process table — so each `@-` waits
-for the value and is closed with Ctrl-D:
+for the value and is closed with Ctrl-D.
+
+**These seven read from the terminal too: one at a time.** Pasted together,
+the second line becomes the value of the first.
 
 ```sh
-bao kv put <mount>/inference/interactive   key=@-
-bao kv put <mount>/inference/programmatic  key=@-
-bao kv put <mount>/inference/extraction    key=@-
-bao kv put <mount>/memory/tenant_key       key=@-
-bao kv put <mount>/memory/cp_key           key=@-
-bao kv put <mount>/db/hindsight            username=<db-user> password=@-
-bao kv put <mount>/skills/github_token     token=@-
+bao kv put "$MOUNT/inference/interactive"   key=@-
+bao kv put "$MOUNT/inference/programmatic"  key=@-
+bao kv put "$MOUNT/inference/extraction"    key=@-
+bao kv put "$MOUNT/memory/tenant_key"       key=@-
+bao kv put "$MOUNT/memory/cp_key"           key=@-
+bao kv put "$MOUNT/db/hindsight"            username="$DB_USER" password=@-
+bao kv put "$MOUNT/skills/github_token"     token=@-
+```
 
+The rest are generated rather than supplied, so nothing waits and the block
+is pasted whole:
+
+```sh
 gen() { openssl rand -base64 32; }
-bao kv put <mount>/authelia/jwt_secret          value="$(gen)"
-bao kv put <mount>/authelia/session_secret      value="$(gen)"
-bao kv put <mount>/authelia/storage_key         value="$(gen)"
-bao kv put <mount>/ui/webui_secret              value="$(gen)"
-bao kv put <mount>/observability/phoenix_secret value="$(gen)"
-bao kv put <mount>/eval/token                   value="$(gen)"
-bao kv put <mount>/broker/tokens \
+bao kv put "$MOUNT/authelia/jwt_secret"          value="$(gen)"
+bao kv put "$MOUNT/authelia/session_secret"      value="$(gen)"
+bao kv put "$MOUNT/authelia/storage_key"         value="$(gen)"
+bao kv put "$MOUNT/ui/webui_secret"              value="$(gen)"
+bao kv put "$MOUNT/observability/phoenix_secret" value="$(gen)"
+bao kv put "$MOUNT/eval/token"                   value="$(gen)"
+bao kv put "$MOUNT/broker/tokens" \
   interactive="$(gen)" programmatic="$(gen)" \
   extraction="$(gen)" eval="$(gen)"
 ```
 
-Verify **completeness by difference**, not path by path:
-
-The list is read from the guest and compared against the file on the node,
-which is the only place both exist. From the node:
+Verify **completeness by difference**, not path by path. The list of what
+should exist came over with the policies, so the comparison is made on
+`hrm-sec` against the store itself:
 
 ```sh
-ssh root@"$SEC_ADDR" "BAO_ADDR=https://$SEC_ADDR:8200 \
-  BAO_CACERT=/run/openbao/cert.pem BAO_TOKEN=$BAO_TOKEN \
-  bao kv list -format=json $MOUNT/" | jq -r '.[]' | sort > /tmp/actual.txt
-diff -u "$POLICIES/expected-paths.txt" /tmp/actual.txt && echo "COMPLETE"
+cd /tmp/hermes-policies
+cut -d/ -f1 expected-paths.txt | sort -u | while read -r prefix; do
+  bao kv list "$MOUNT/$prefix" | tail -n +3 | sed "s|^|$prefix/|"
+done | sort > actual.txt
+diff -u expected-paths.txt actual.txt && echo "COMPLETE"
 ```
+
+`kv list` reports one level at a time, which is why the loop walks the
+prefixes rather than asking for the tree: a single `kv list` of the mount
+returns `authelia/`, `broker/`, `db/` and the rest, and comparing that against
+a list of leaves reports every path as missing. A prefix holding nothing makes
+`kv list` complain on stderr and the leaves under it appear in the diff, which
+is the answer the check exists to give.
 
 The distinction matters. A path declared and never populated does not produce
 a configuration error — it produces the failure of whichever step reads it,
 and when that step is the negative test below, the failure reads as evidence
 that the invariant holds.
 
+```sh
+cd && rm -rf /tmp/hermes-policies
+```
+
+#### The bootstrap credentials
+
+The AppRoles exist but nobody holds them yet. Each guest's agent authenticates
+with a `role_id` and a `secret_id` it reads from `/run/secrets`, and those are
+the `PENDING_F03` values in `secrets/*.yaml` — this is the step that replaces
+them. Until it is done, every `bao-agent-*` unit on every guest fails to log
+in, and the gate below has nothing to run as.
+
+On `hrm-sec`, print the ten values:
+
+```sh
+for role in broker hermes memory ingress eval; do
+  printf '%-8s role_id    %s\n' "$role" \
+    "$(bao read -field=role_id "auth/approle/role/$role/role-id")"
+  printf '%-8s secret_id  %s\n' "$role" \
+    "$(bao write -f -field=secret_id "auth/approle/role/$role/secret-id")"
+done
+```
+
+`role_id` is a property of the role and can be read again; `secret_id` is
+issued by that `write` and is shown once, like the root token. Re-running the
+loop issues a *second* secret_id rather than reprinting the first — harmless,
+since `secret_id_num_uses` is unbounded, but the guest must then hold whichever
+one was actually recorded.
+
+They are distributed by role, not by convenience: no guest may hold a
+credential that is not its own. On the node, with the age key:
+
+| File | Keys it receives |
+| --- | --- |
+| `secrets/hrm-app.yaml` | `openbao.hermes.{role_id,secret_id}`, `openbao.broker.{role_id,secret_id}` |
+| `secrets/hrm-edge.yaml` | `openbao.ingress.{role_id,secret_id}` |
+| `secrets/hrm-mem.yaml` | `openbao.memory.{role_id,secret_id}` |
+| `secrets/hrm-sec.yaml` | `openbao.eval.{role_id,secret_id}` |
+
+```sh
+for HOST in hrm-app hrm-edge hrm-mem hrm-sec; do
+  sops "secrets/$HOST.yaml"                  # replace that file's PENDING_F03
+done
+git add secrets/
+```
+
+Then rebuild each guest so the new values reach `/run/secrets`, and read the
+result from the units that were waiting for them:
+
+```sh
+for pair in "hrm-sec:$SEC_ADDR" "hrm-mem:$MEM_ADDR" \
+            "hrm-app:$APP_ADDR" "hrm-edge:$EDGE_ADDR"; do
+  nixos-rebuild switch --flake ".#${pair%%:*}" \
+    --target-host "root@${pair##*:}" --build-host localhost
+done
+```
+
+The addresses are the ones read at the head of the installation section; the
+guests are addressed by address rather than by name because nothing on the
+node resolves their names. Then:
+
+```sh
+ssh "root@$APP_ADDR" "systemctl status 'bao-agent-*' --no-pager"
+```
+
+A unit still failing here has the wrong credential or a policy that was not
+written; a unit active has authenticated against the store, which is the first
+end-to-end proof that the chain works.
+
 **Gate.** On `hrm-app`, with the credential that guest holds — which is the
 whole point: the test is performed by the identity under test, not on its
 behalf.
 
+Open it with the header the node printed, plus that guest's `BAO_CACERT`,
+then:
+
 ```sh
-export BAO_ADDR="https://<secrets-address>:8200"
-export BAO_CACERT=<the copy of the store's certificate>   # see above
+BAO_TOKEN=$(bao write -field=token auth/approle/login \
+  role_id=@/run/secrets/openbao/hermes/role_id \
+  secret_id=@/run/secrets/openbao/hermes/secret_id)
+export BAO_TOKEN
 
-bao write auth/approle/login \
-  role_id="$(cat /run/secrets/openbao/hermes/role_id)" \
-  secret_id="$(cat /run/secrets/openbao/hermes/secret_id)"
-export BAO_TOKEN=<the token that login returned>
-
-bao kv get <mount>/inference/interactive ; echo "exit=$?"   # must FAIL, 403
-bao kv get <mount>/broker/tokens     >/dev/null && echo "tokens OK"
-bao kv get <mount>/memory/tenant_key >/dev/null && echo "tenant OK"
+bao kv get "$MOUNT/inference/interactive" ; echo "exit=$?"   # must FAIL, 403
+bao kv get "$MOUNT/broker/tokens"     >/dev/null && echo "tokens OK"
+bao kv get "$MOUNT/memory/tenant_key" >/dev/null && echo "tenant OK"
 ```
+
+`key=@path` makes the CLI read the value out of the file, so neither the two
+credentials nor the token they buy is ever a command argument — the same rule
+that governs the writes above, applied to the read that tests them.
 
 The refusal is then read in the audit trail, and that reading happens from the
 node: `hrm-app` cannot open an SSH session to `hrm-sec` — port 22 there is
@@ -911,20 +1127,25 @@ a failed acceptance criterion and a migration with a full re-embedding —
 after the first retention it is no longer a decision.
 
 ```sh
-nixos-rebuild switch --flake .#<memory-host>
+nixos-rebuild switch --flake ".#$MEM"
 systemctl status podman-hermes-pg podman-hindsight --no-pager
-curl -sS http://<memory-address>:8888/health
+curl -sS "http://$MEM_ADDR:8888/health"
 ```
 
 **Gate.** Authentication exists in the backend but ships disabled. Prove it is
-on:
+on. `$TENANT` is the tenant whose banks are being asked for and `$KEY` the
+tenant key written to the store in F-03 — read it back from there rather than
+retyping it:
 
 ```sh
+TENANT=$(nix eval --raw .#nixosConfigurations.hrm-mem.config.hermes.memory.hindsight.tenant)
+KEY=$(bao kv get -field=key "$MOUNT/memory/tenant_key")
+
 curl -sS -o /dev/null -w "%{http_code}\n" \
-  http://<memory-address>:8888/v1/<tenant>/banks                    # expect 401
+  "http://$MEM_ADDR:8888/v1/$TENANT/banks"                    # expect 401
 
 curl -sS -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $KEY" \
-  http://<memory-address>:8888/v1/<tenant>/banks                    # expect 200
+  "http://$MEM_ADDR:8888/v1/$TENANT/banks"                    # expect 200
 ```
 
 A success in the first case means the tenant extension is not loaded. Note
@@ -935,13 +1156,13 @@ on the segmentation.
 ### F-05 — Egress broker
 
 ```sh
-nixos-rebuild switch --flake .#<agent-host>
+nixos-rebuild switch --flake ".#$APP"
 systemctl status egress-broker --no-pager
 
-curl -sS http://<broker-host>:8081/healthz
-curl -sS http://<broker-host>:8081/v1/models -H "Authorization: Bearer $TOKEN" | head -c 400
+curl -sS "http://$APP_ADDR:8081/healthz"
+curl -sS "http://$APP_ADDR:8081/v1/models" -H "Authorization: Bearer $TOKEN" | head -c 400
 curl -sS -o /dev/null -w "%{http_code}\n" \
-  http://<broker-host>:8081/v1/models -H "Authorization: Bearer invented"   # expect 401
+  "http://$APP_ADDR:8081/v1/models" -H "Authorization: Bearer invented"   # expect 401
 ```
 
 Confirm the model identifiers against the catalogue returned **through the
@@ -956,12 +1177,12 @@ keeps working but becomes blind.
 ### F-06 — Interactive agentic plane
 
 ```sh
-nixos-rebuild switch --flake .#<agent-host>
+nixos-rebuild switch --flake ".#$APP"
 systemctl status container@hermes-core container@hermes-svc --no-pager
 systemctl status hermes-provision-profiles --no-pager
 
 ss -lntp | grep 8000                          # bound to loopback, not the wildcard
-nixos-rebuild switch --flake .#<agent-host>   # idempotence: no change on the second run
+nixos-rebuild switch --flake ".#$APP"   # idempotence: no change on the second run
 ```
 
 Confirm one bank per profile, with distinct and non-intersecting identifiers.
@@ -991,11 +1212,11 @@ an observation.
 ### F-07 — Ingress, identity and interface
 
 ```sh
-nixos-rebuild switch --flake .#<ingress-host>
-curl -sSI https://<public-fqdn>/ | head -5           # expect a redirect to the portal
+nixos-rebuild switch --flake ".#$EDGE"
+curl -sSI "https://$FQDN/" | head -5           # expect a redirect to the portal
 
 systemctl stop authelia-main
-curl -sS -o /dev/null -w "%{http_code}\n" https://<public-fqdn>/   # expect 5xx
+curl -sS -o /dev/null -w "%{http_code}\n" "https://$FQDN/"   # expect 5xx
 systemctl start authelia-main
 ```
 
@@ -1005,19 +1226,24 @@ success. A success means the verification path is bypassable.
 **Gate.** The trusted-header model is only as good as the guarantee that the
 proxy is the sole path:
 
+`$OTHER_USER` is any address that is not the one the session belongs to —
+the point is that the proxy, not the client, decides who the request is from:
+
 ```sh
+OTHER_USER=someone.else@example.invalid
+
 # forged identity header from the client
-curl -sS https://<public-fqdn>/ -H "Remote-Email: <other-user>" \
+curl -sS "https://$FQDN/" -H "Remote-Email: $OTHER_USER" \
   -o /dev/null -w "%{http_code}\n"
 
 # downstream services from the user network: must not be routable
 for port in 8000 8888 8200; do
-  timeout 5 bash -c "echo > /dev/tcp/<agent-address>/$port" 2>/dev/null \
+  timeout 5 bash -c "echo > /dev/tcp/$APP_ADDR/$port" 2>/dev/null \
     && echo "$port REACHABLE — DEFECT" || echo "$port not routable"
 done
 
 # chat interface, bypassing the proxy
-timeout 5 bash -c "echo > /dev/tcp/<ingress-edge-address>/8080" 2>/dev/null \
+timeout 5 bash -c "echo > /dev/tcp/$EDGE_ADDR/8080" 2>/dev/null \
   && echo "REACHABLE — DEFECT" || echo "refused (loopback bind)"
 ```
 
@@ -1026,10 +1252,16 @@ rather than refused at the application: the request must not arrive.
 
 ### F-08 — Programmatic plane
 
+`$WORKLOAD` is one of the names declared under
+`hermes.programmatic.workloads`, on `$APP`:
+
 ```sh
+WORKLOAD=$(systemctl list-units --plain --no-legend 'hermes-svc-*' \
+  | head -1 | sed 's/^hermes-svc-//; s/\.service.*//')
+
 systemctl list-timers | grep hermes-svc
-systemctl start hermes-svc-<workload>
-journalctl -u hermes-svc-<workload> -n 50 --no-pager
+systemctl start "hermes-svc-$WORKLOAD"
+journalctl -u "hermes-svc-$WORKLOAD" -n 50 --no-pager
 ```
 
 **Gate — five isolation checks.** Distinct profile; distinct and
@@ -1049,7 +1281,7 @@ Bring up the evaluation platform first. Starting the collection stack against
 a backend that does not exist makes the exporter fail silently.
 
 ```sh
-nixos-rebuild switch --flake .#<observability-host>
+nixos-rebuild switch --flake ".#$SEC"
 systemctl status phoenix --no-pager
 stat -c "%a %U:%G" /run/secrets/phoenix.env       # expect 400, owned by the service
 systemctl show phoenix -p MemoryMax -p MemoryHigh -p MemoryAccounting
