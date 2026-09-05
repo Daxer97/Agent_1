@@ -97,14 +97,29 @@ in
       # dropped in the same path, with the unit stopped, is the whole of what
       # changing it involves.
       preStart = ''
-        if [ ! -s /var/lib/openbao/tls/cert.pem ]; then
+        # The names the certificate has to carry. The address is what the
+        # other guests connect to; the host name is what an operator types;
+        # loopback is what the CLI on this guest uses when BAO_ADDR is unset,
+        # which is every `bao status` typed without a preamble.
+        san=${lib.escapeShellArg (
+          "subjectAltName=IP:${store.address},IP:127.0.0.1"
+          + ",DNS:${cfg.guests.secrets.hostName},DNS:localhost")}
+
+        # Regenerated when that set changes, not only when the file is
+        # missing. Without the comparison a certificate outlives the parameter
+        # it was issued from: change the address and the store keeps
+        # presenting the old one, and the failure surfaces on the clients as a
+        # name mismatch rather than here as a stale file.
+        if [ ! -s /var/lib/openbao/tls/cert.pem ] \
+           || [ "$(cat /var/lib/openbao/tls/san 2>/dev/null)" != "$san" ]; then
           mkdir -p /var/lib/openbao/tls
           openssl req -x509 -newkey rsa:4096 -sha256 -days 825 -nodes \
             -subj "/CN=${cfg.guests.secrets.hostName}" \
-            -addext "subjectAltName=IP:${store.address},DNS:${cfg.guests.secrets.hostName}" \
+            -addext "$san" \
             -keyout /var/lib/openbao/tls/key.pem \
             -out /var/lib/openbao/tls/cert.pem
           chmod 600 /var/lib/openbao/tls/key.pem
+          printf '%s' "$san" > /var/lib/openbao/tls/san
         fi
 
         # The public half, where the operator and the agents of the other

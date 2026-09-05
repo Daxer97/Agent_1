@@ -831,10 +831,17 @@ module runs openbao under a **dynamic user**, which exists only while the unit
 does, and its state directory is private to that account. There is no
 `openbao` user to own a file, and no path outside the unit that it could read.
 
-So the store issues its own on first start, self-signed, with the address of
-the store in the subject alternative name — that is what every client
-connects to. Nothing is required of the operator except to take a copy of the
-public half, which is published where it can be read:
+So the store issues its own on first start, self-signed, carrying the address
+every client connects to, the host name, and loopback — the last because the
+CLI on that guest defaults to `https://127.0.0.1:8200` when `BAO_ADDR` is
+unset, and a certificate without it turns a bare `bao status` into a
+name-mismatch error that says nothing about what is wrong.
+
+The names are derived from the parameters, and the unit compares them against
+the certificate it already has: change the address and the next start reissues
+it, rather than presenting the client a certificate for an address the store
+no longer answers on. Nothing is required of the operator except to take a
+copy of the public half, which is published where it can be read:
 
 ```sh
 scp root@"$SEC_ADDR":/run/openbao/cert.pem ./openbao-cert.pem
@@ -877,8 +884,11 @@ bao status                                   # Initialized false, Sealed true
 ```
 
 `status` exits non-zero while the store is sealed — that is its way of
-reporting the seal, not a failure of the command. What it must say before
-anything below is run is `Initialized false`. Anything else means the store
+reporting the seal, not a failure of the command. A message about a
+certificate valid for the address but *not for 127.0.0.1* means the guest is
+running a store built before the certificate covered loopback: rebuild it, and
+the unit reissues the certificate on the restart that follows. What `status`
+must say before anything below is run is `Initialized false`. Anything else means the store
 has been initialised already, and `init` would be refused: recover the
 existing root token rather than running it again.
 
