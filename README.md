@@ -694,19 +694,75 @@ This phase builds the load-bearing link of the security chain, and it runs
 before any application is deployed because it contains the test that makes the
 central invariant verifiable instead of asserted.
 
-```sh
-export BAO_ADDR="https://<secrets-address>:8200"
+Three machines are involved, and which command runs where is not a matter of
+convenience. The store listens on 8200, and the firewall of its guest admits
+that port from the application and data zones only — the management range,
+which is where the node is, reaches port 22 and nothing else. So `bao` is run
+on the guest that holds the store, or on a guest inside those zones; it is
+never run from the node.
 
-bao operator init -key-shares=3 -key-threshold=2
+| Runs on | What |
+| --- | --- |
+| The node, in the repository | `nix build`, `nix eval`, and anything that reads a file of this repository |
+| `hrm-sec`, over SSH | every `bao` command against the store |
+| `hrm-app`, over SSH | the gate, which is the point of the phase |
+
+#### The values of this deployment
+
+They are parameters, so they are read rather than typed. On the node:
+
+```sh
+SEC_ADDR=$(nix eval --raw .#nixosConfigurations.hrm-sec.config.hermes.secretStore.address)
+MOUNT=$(nix eval --raw .#nixosConfigurations.hrm-sec.config.hermes.secretStore.mount)
+AUDIT=$(nix eval --raw .#nixosConfigurations.hrm-sec.config.hermes.secretStore.auditPath)
+SHARES=$(nix eval .#nixosConfigurations.hrm-sec.config.hermes.secretStore.keyShares)
+THRESHOLD=$(nix eval .#nixosConfigurations.hrm-sec.config.hermes.secretStore.keyThreshold)
+DB_USER=$(nix eval --raw .#nixosConfigurations.hrm-mem.config.hermes.memory.postgres.user)
+```
+
+With the parameters as they stand, that is `10.102.0.14`, mount `hermes`,
+audit path `/var/log/openbao`, three shares of which two are needed, and the
+database role `hindsight`.
+
+#### The listener's certificate
+
+TLS is mandatory on the store and nothing in this flake issues the
+certificate: the module creates `/var/lib/openbao/tls` and expects
+`cert.pem` and `key.pem` in it. Without them openbao does not start, and
+`bao operator init` reports a connection failure — which reads as a network
+problem and is not one. On `hrm-sec`:
+
+```sh
+openssl req -x509 -newkey rsa:4096 -sha256 -days 825 -nodes \
+  -keyout /var/lib/openbao/tls/key.pem -out /var/lib/openbao/tls/cert.pem \
+  -subj "/CN=hrm-sec" -addext "subjectAltName=IP:<secrets-address>,DNS:hrm-sec"
+chown openbao:openbao /var/lib/openbao/tls/*
+chmod 600 /var/lib/openbao/tls/key.pem
+systemctl restart openbao
+```
+
+The address must be in the subject alternative name, because that is what
+every client connects to. The same certificate is what the agents on the
+other guests have to trust.
+
+#### Initialising the store
+
+On `hrm-sec`. `bao` is the CLI of the service and is not necessarily on the
+administrative PATH; the first line finds it in the closure of the unit that
+is already running it:
+
+```sh
+command -v bao || export PATH="$(dirname "$(ls /nix/store/*-openbao-*/bin/bao | head -1)"):$PATH"
+
+export BAO_ADDR="https://<secrets-address>:8200"
+export BAO_CACERT=/var/lib/openbao/tls/cert.pem
+
+bao operator init -key-shares=<shares> -key-threshold=<threshold>
 bao operator unseal                          # repeat until the threshold is met
+export BAO_TOKEN=<the root token init printed>
 
 bao secrets enable -path=<mount> kv-v2
 bao auth enable approle
-
-POLICIES=$(nix build .#baoPolicies --print-out-paths)
-for policy in broker hermes memory ingress eval; do
-  bao policy write "$policy" "$POLICIES/$policy.hcl"
-done
 
 for role in broker hermes memory ingress eval; do
   bao write "auth/approle/role/$role" \
@@ -717,8 +773,26 @@ done
 bao audit enable file file_path=<audit-path>/openbao-audit.log
 ```
 
-Populate every path. Values arrive on stdin, never as command arguments —
-arguments are visible in the process table:
+`init` prints the unseal shares and the root token once and never again. The
+shares do not stay on this guest — holding them there is equivalent to not
+having them — and the root token is exported for the rest of this phase only.
+
+The policies are built where the flake is and written where the store is.
+`bao policy write` reads from standard input, which is what joins the two.
+From the node:
+
+```sh
+POLICIES=$(nix build .#baoPolicies --print-out-paths)
+for policy in broker hermes memory ingress eval; do
+  ssh root@"$SEC_ADDR" "BAO_ADDR=https://$SEC_ADDR:8200 \
+    BAO_CACERT=/var/lib/openbao/tls/cert.pem BAO_TOKEN=$BAO_TOKEN \
+    bao policy write $policy -" < "$POLICIES/$policy.hcl"
+done
+```
+
+Populate every path, on `hrm-sec`. Values arrive on stdin, never as command
+arguments — arguments are visible in the process table — so each `@-` waits
+for the value and is closed with Ctrl-D:
 
 ```sh
 bao kv put <mount>/inference/interactive   key=@-
@@ -726,7 +800,7 @@ bao kv put <mount>/inference/programmatic  key=@-
 bao kv put <mount>/inference/extraction    key=@-
 bao kv put <mount>/memory/tenant_key       key=@-
 bao kv put <mount>/memory/cp_key           key=@-
-bao kv put <mount>/db/hindsight            username=<user> password=@-
+bao kv put <mount>/db/hindsight            username=<db-user> password=@-
 bao kv put <mount>/skills/github_token     token=@-
 
 gen() { openssl rand -base64 32; }
@@ -743,8 +817,13 @@ bao kv put <mount>/broker/tokens \
 
 Verify **completeness by difference**, not path by path:
 
+The list is read from the guest and compared against the file on the node,
+which is the only place both exist. From the node:
+
 ```sh
-bao kv list -format=json <mount>/ | jq -r '.[]' | sort > /tmp/actual.txt
+ssh root@"$SEC_ADDR" "BAO_ADDR=https://$SEC_ADDR:8200 \
+  BAO_CACERT=/var/lib/openbao/tls/cert.pem BAO_TOKEN=$BAO_TOKEN \
+  bao kv list -format=json $MOUNT/" | jq -r '.[]' | sort > /tmp/actual.txt
 diff -u "$POLICIES/expected-paths.txt" /tmp/actual.txt && echo "COMPLETE"
 ```
 
@@ -753,18 +832,31 @@ a configuration error — it produces the failure of whichever step reads it,
 and when that step is the negative test below, the failure reads as evidence
 that the invariant holds.
 
-**Gate.** From the agentic guest:
+**Gate.** On `hrm-app`, with the credential that guest holds — which is the
+whole point: the test is performed by the identity under test, not on its
+behalf.
 
 ```sh
+export BAO_ADDR="https://<secrets-address>:8200"
+export BAO_CACERT=/var/lib/openbao/tls/cert.pem
+
 bao write auth/approle/login \
   role_id="$(cat /run/secrets/openbao/hermes/role_id)" \
   secret_id="$(cat /run/secrets/openbao/hermes/secret_id)"
+export BAO_TOKEN=<the token that login returned>
 
 bao kv get <mount>/inference/interactive ; echo "exit=$?"   # must FAIL, 403
 bao kv get <mount>/broker/tokens     >/dev/null && echo "tokens OK"
 bao kv get <mount>/memory/tenant_key >/dev/null && echo "tenant OK"
+```
 
-ssh <secrets-address> "grep -c permission_denied <audit-path>/openbao-audit.log"
+The refusal is then read in the audit trail, and that reading happens from the
+node: `hrm-app` cannot open an SSH session to `hrm-sec` — port 22 there is
+admitted from the management range alone, which is what the segmentation is
+for.
+
+```sh
+ssh root@"$SEC_ADDR" "grep -c permission_denied $AUDIT/openbao-audit.log"
 ```
 
 Anything other than a refusal on the first read is a blocking defect. Do not
