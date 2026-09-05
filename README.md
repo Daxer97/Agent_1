@@ -726,24 +726,24 @@ database role `hindsight`.
 
 #### The listener's certificate
 
-TLS is mandatory on the store and nothing in this flake issues the
-certificate: the module creates `/var/lib/openbao/tls` and expects
-`cert.pem` and `key.pem` in it. Without them openbao does not start, and
-`bao operator init` reports a connection failure — which reads as a network
-problem and is not one. On `hrm-sec`:
+TLS is mandatory on the store, and the certificate is not placed by hand: the
+module runs openbao under a **dynamic user**, which exists only while the unit
+does, and its state directory is private to that account. There is no
+`openbao` user to own a file, and no path outside the unit that it could read.
+
+So the store issues its own on first start, self-signed, with the address of
+the store in the subject alternative name — that is what every client
+connects to. Nothing is required of the operator except to take a copy of the
+public half, which is published where it can be read:
 
 ```sh
-openssl req -x509 -newkey rsa:4096 -sha256 -days 825 -nodes \
-  -keyout /var/lib/openbao/tls/key.pem -out /var/lib/openbao/tls/cert.pem \
-  -subj "/CN=hrm-sec" -addext "subjectAltName=IP:<secrets-address>,DNS:hrm-sec"
-chown openbao:openbao /var/lib/openbao/tls/*
-chmod 600 /var/lib/openbao/tls/key.pem
-systemctl restart openbao
+scp root@"$SEC_ADDR":/run/openbao/cert.pem ./openbao-cert.pem
 ```
 
-The address must be in the subject alternative name, because that is what
-every client connects to. The same certificate is what the agents on the
-other guests have to trust.
+That file is what verifies the listener: `BAO_CACERT` below, and later the
+agents of the other guests. Replacing the certificate with one from an
+internal authority is a matter of stopping the unit and writing the pair into
+`/var/lib/openbao/tls`; the store keeps whatever it finds there.
 
 #### Initialising the store
 
@@ -755,7 +755,7 @@ is already running it:
 command -v bao || export PATH="$(dirname "$(ls /nix/store/*-openbao-*/bin/bao | head -1)"):$PATH"
 
 export BAO_ADDR="https://<secrets-address>:8200"
-export BAO_CACERT=/var/lib/openbao/tls/cert.pem
+export BAO_CACERT=/run/openbao/cert.pem
 
 bao operator init -key-shares=<shares> -key-threshold=<threshold>
 bao operator unseal                          # repeat until the threshold is met
@@ -785,7 +785,7 @@ From the node:
 POLICIES=$(nix build .#baoPolicies --print-out-paths)
 for policy in broker hermes memory ingress eval; do
   ssh root@"$SEC_ADDR" "BAO_ADDR=https://$SEC_ADDR:8200 \
-    BAO_CACERT=/var/lib/openbao/tls/cert.pem BAO_TOKEN=$BAO_TOKEN \
+    BAO_CACERT=/run/openbao/cert.pem BAO_TOKEN=$BAO_TOKEN \
     bao policy write $policy -" < "$POLICIES/$policy.hcl"
 done
 ```
@@ -822,7 +822,7 @@ which is the only place both exist. From the node:
 
 ```sh
 ssh root@"$SEC_ADDR" "BAO_ADDR=https://$SEC_ADDR:8200 \
-  BAO_CACERT=/var/lib/openbao/tls/cert.pem BAO_TOKEN=$BAO_TOKEN \
+  BAO_CACERT=/run/openbao/cert.pem BAO_TOKEN=$BAO_TOKEN \
   bao kv list -format=json $MOUNT/" | jq -r '.[]' | sort > /tmp/actual.txt
 diff -u "$POLICIES/expected-paths.txt" /tmp/actual.txt && echo "COMPLETE"
 ```
@@ -838,7 +838,7 @@ behalf.
 
 ```sh
 export BAO_ADDR="https://<secrets-address>:8200"
-export BAO_CACERT=/var/lib/openbao/tls/cert.pem
+export BAO_CACERT=<the copy of the store's certificate>   # see above
 
 bao write auth/approle/login \
   role_id="$(cat /run/secrets/openbao/hermes/role_id)" \

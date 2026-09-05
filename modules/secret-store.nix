@@ -51,19 +51,82 @@ in
         api_addr = "https://${store.address}:${toString store.port}";
         cluster_addr = "https://${store.address}:${toString store.clusterPort}";
 
-        # Key material must not reach swap.
-        disable_mlock = false;
+        # Key material must not reach swap, and mlock is not what keeps it
+        # off here. The NixOS module runs the store as a dynamic user with an
+        # empty capability bounding set, so IPC_LOCK cannot be granted to it;
+        # openbao refuses to start with this set to false and says so — the
+        # message names the line and recommends removing it.
+        #
+        # What replaces it is stronger for this unit, because it does not
+        # depend on a syscall succeeding: the same module sets
+        # MemorySwapMax=0, so the kernel never swaps this cgroup's memory at
+        # all, whether or not the process asked for it.
+        disable_mlock = true;
 
         log_level = cfg.observability.logLevel;
       };
     };
 
+    # There is no openbao account to own anything: the module runs the store
+    # under a dynamic user, which exists only while the unit does. Rules
+    # naming one are refused by systemd-tmpfiles with "unknown user", and the
+    # directories they were meant to create are simply never created — which
+    # is why the state directory was empty and the listener had no
+    # certificate to read.
+    #
+    # The three that belong to the store are provided by the unit instead:
+    # StateDirectory for its data, LogsDirectory for the audit trail, and the
+    # certificate below. What is left here is the one directory that belongs
+    # to root.
     systemd.tmpfiles.rules = [
-      "d /var/lib/openbao/data 0700 openbao openbao -"
-      "d /var/lib/openbao/tls  0700 openbao openbao -"
-      "d ${store.auditPath}    0700 openbao openbao -"
       "d ${cfg.backup.stagingPath} 0700 root root -"
     ];
+
+    systemd.services.openbao = {
+      # The audit trail is written by the same dynamic user, so the directory
+      # has to be one systemd hands it. LogsDirectory is that, and it is the
+      # reason auditPath is asserted to live under /var/log.
+      serviceConfig.LogsDirectory = lib.removePrefix "/var/log/" store.auditPath;
+
+      path = [ pkgs.openssl ];
+
+      # TLS is mandatory on the listener and the certificate cannot be placed
+      # by hand: the account that must read it exists only while the unit
+      # runs, and its state directory is private to that account. So the
+      # store issues its own on first start, with the address in the subject
+      # alternative name because that is what every client connects to.
+      #
+      # Self-signed and replaceable. A certificate from an internal authority
+      # dropped in the same path, with the unit stopped, is the whole of what
+      # changing it involves.
+      preStart = ''
+        if [ ! -s /var/lib/openbao/tls/cert.pem ]; then
+          mkdir -p /var/lib/openbao/tls
+          openssl req -x509 -newkey rsa:4096 -sha256 -days 825 -nodes \
+            -subj "/CN=${cfg.guests.secrets.hostName}" \
+            -addext "subjectAltName=IP:${store.address},DNS:${cfg.guests.secrets.hostName}" \
+            -keyout /var/lib/openbao/tls/key.pem \
+            -out /var/lib/openbao/tls/cert.pem
+          chmod 600 /var/lib/openbao/tls/key.pem
+        fi
+
+        # The public half, where the operator and the agents of the other
+        # guests can read it. Nothing else publishes it, and every client
+        # that verifies this listener needs it.
+        install -m 0444 /var/lib/openbao/tls/cert.pem /run/openbao/cert.pem
+      '';
+    };
+
+    assertions = [{
+      assertion = lib.hasPrefix "/var/log/" store.auditPath;
+      message = ''
+        hermes.secretStore.auditPath is ${store.auditPath}, and the store
+        writes its audit trail as a dynamic user that can only be given a
+        directory under /var/log, through LogsDirectory. A path elsewhere
+        would be created by nobody and the audit device would fail to enable
+        — after the phase that depends on it has reported success.
+      '';
+    }];
 
     # The audit trail has a declared retention, longer than the general one
     # because it is the documentary evidence that the separation of policies
