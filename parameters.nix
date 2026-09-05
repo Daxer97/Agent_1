@@ -377,7 +377,7 @@
       # Left null the agents use the system trust store, which the self-signed
       # certificate is not in — and the failure is a TLS error that does not
       # mention a certificate.
-      caCertificate = null;
+      caCertificate = "./config/openbao/cert.pem"
 
       # On local-lvm, deliberately not on the pool of the memory guest and on
       # a filesystem separate from the observability volume: documentary
@@ -936,7 +936,7 @@
         # conversational content is not a detail to inherit by accident. The
         # image is pulled by podman on the guest that runs it, at the first
         # start of the unit — nothing is placed on the node.
-        image = "PLACEHOLDER_PHOENIX_IMAGE@sha256:0000000000000000000000000000000000000000000000000000000000000000";
+        image = "docker.io/arizephoenix/phoenix@sha256:1c8865fb7176c608e9dfeee3d0ff88006f372109a312bd70e408c006c451707e";
 
         # Neither the wildcard address nor loopback: reached through the
         # proxy, which sits in another zone. Before this parameter existed the
