@@ -116,7 +116,26 @@ in
       after = [ "bao-agent-eval.service" ];
       requires = [ "bao-agent-eval.service" ];
 
+      # The container restarts on failure, and a restart that never stops is
+      # not resilience: `switch-to-configuration` starts this unit and waits
+      # for it to reach a terminal state, so a unit that fails and restarts
+      # forever holds every activation of this guest open — including the
+      # ones that F-03 depends on, which is a deadlock, because the
+      # credentials this container waits for are what F-03 issues.
+      #
+      # The default limit does not catch it: five failures within ten seconds,
+      # against a container that takes about five seconds to fail. Widening
+      # the window is what makes the limit apply, so the unit gives up, enters
+      # failed, and the activation continues and reports it.
+      startLimitIntervalSec = 600;
+      startLimitBurst = 5;
+
       serviceConfig = {
+        # Long enough that the registry is not hammered while the image is
+        # unreachable, short enough that a transient failure recovers without
+        # an operator.
+        RestartSec = 30;
+
         MemoryAccounting = true;
         MemoryHigh = eval.memoryHigh;
         MemoryMax = eval.memoryMax;
