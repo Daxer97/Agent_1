@@ -25,11 +25,11 @@
 # name until they are registered.
 
 keys:
-  - &admin PLACEHOLDER_AGE_KEY_ADMIN
-  - &host_ingress PLACEHOLDER_AGE_KEY_INGRESS
-  - &host_agent PLACEHOLDER_AGE_KEY_AGENT
-  - &host_memory PLACEHOLDER_AGE_KEY_MEMORY
-  - &host_secrets PLACEHOLDER_AGE_KEY_SECRETS
+  - &admin age1jy2k2vyjxugmte7v8fkll23rvadpj3wyv4mqjsjacw2lg0j44fpsxc3m8j
+  - &host_ingress age1fn2pfvg8p7xvfhycv82evgz2jyx3t9pvhca5wg08hk3dzktl3dzqrmeh9r
+  - &host_agent age18a75xr4dsmzgv35vkxmskc6ccag5pvq36yvzt0gfhgcccaf9rphqwp60lx
+  - &host_memory age137lahdcryvth3ppfxv975s2ef3ulmqy3k684xxs0tf7ydkwsaatqfa0r69
+  - &host_secrets age1sc9wlxx5z9nt3whl2q4vmjkyqqy438c5pn8mxlus0h5r3kaj5q9q70u6ew
 
 creation_rules:
   - path_regex: secrets/hrm-edge\.yaml$

@@ -343,7 +343,7 @@
       #
       # It is the public half. The private half stays on the workstation, and
       # the same key is what nixos-anywhere authenticates with.
-      adminKeys = [ "PLACEHOLDER_ADMIN_SSH_PUBLIC_KEY" ];
+      adminKeys = [ "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHYqBMaDdeMeJBI+t+usF4s8MEHJGPX4L3I5EzKcznk9 root@pveai" ];
 
       # Derived from the SSH host key: no additional key to distribute.
       sopsAgeKeyPath = "/etc/ssh/ssh_host_ed25519_key";
