@@ -435,7 +435,11 @@
         # This image comes from Docker Hub, not from the registry the node
         # survey reached: registry-1.docker.io is still to be added to the
         # egress tests of F-01.3.
-        image = "pgvector/pgvector@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f";
+        # Fully qualified, and that is not cosmetic: podman refuses a short
+        # name unless unqualified-search-registries is configured, which
+        # nothing here does. "pgvector/pgvector@sha256:..." fails at the pull
+        # with a message about short-name resolution, not about the image.
+        image = "docker.io/pgvector/pgvector@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f";
 
         user = "hindsight";
         database = "hindsight";
@@ -915,14 +919,23 @@
 
       evaluation = {
         # The platform is not in nixpkgs, so it is carried as an image like
-        # the other third-party services. Resolve the digest of the tag you
-        # intend to run, on the node, and replace this value:
+        # the other third-party services. From the development shell, on the
+        # node — skopeo reads the registry without pulling the image:
         #
-        #     skopeo inspect docker://arizephoenix/phoenix:<tag> | jq -r .Digest
+        #     skopeo list-tags docker://docker.io/arizephoenix/phoenix \
+        #       | jq -r '.Tags[]' | tail -20
+        #     skopeo inspect docker://docker.io/arizephoenix/phoenix:<tag> \
+        #       | jq -r .Digest
+        #
+        # The value is the fully qualified name and that digest joined by @,
+        # like the others here: podman refuses a short name, and the failure
+        # names short-name resolution rather than the image.
         #
         # It is left unresolved on purpose rather than filled with a digest
         # nobody checked: which build of the evaluation platform holds the
-        # conversational content is not a detail to inherit by accident.
+        # conversational content is not a detail to inherit by accident. The
+        # image is pulled by podman on the guest that runs it, at the first
+        # start of the unit — nothing is placed on the node.
         image = "PLACEHOLDER_PHOENIX_IMAGE@sha256:0000000000000000000000000000000000000000000000000000000000000000";
 
         # Neither the wildcard address nor loopback: reached through the

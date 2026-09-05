@@ -321,6 +321,7 @@
           jq
           nixos-rebuild
           nixpkgs-fmt
+          skopeo
           sops
           ssh-to-age
           uv
