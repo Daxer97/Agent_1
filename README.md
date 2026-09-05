@@ -647,9 +647,22 @@ sops updatekeys secrets/<host>.yaml
 git add .sops.yaml secrets/<host>.yaml
 
 # Built here and pushed: the guests deny outbound traffic and have no build
-# path of their own.
+# path of their own. nixos-rebuild comes from the development shell — the
+# node runs Proxmox, not NixOS, and does not have it otherwise.
 nixos-rebuild switch --flake .#<host> --target-host root@<address>
 ssh root@<address> "ls -l /run/secrets/"
+```
+
+Without the development shell, the same thing without that command: build the
+closure, copy it, register it as the system profile and activate it — which is
+what `nixos-rebuild` does, and it is worth knowing because it is also the way
+back when a rebuild leaves a guest unreachable.
+
+```sh
+OUT=$(nix build --print-out-paths .#nixosConfigurations.<host>.config.system.build.toplevel)
+nix copy --to ssh://root@<address> "$OUT"
+ssh root@<address> "nix-env -p /nix/var/nix/profiles/system --set $OUT \
+  && $OUT/bin/switch-to-configuration switch"
 ```
 
 The decryption test is the rebuild, and it is not a formality: it is the same

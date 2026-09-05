@@ -310,10 +310,16 @@
         inherit baoPolicies;
       };
 
+      # The tools the procedure uses and the host does not have. The node is
+      # Proxmox and the workstation is whatever it is; neither is a NixOS
+      # machine, so nixos-rebuild is here for the same reason sops is — every
+      # phase that deploys a guest builds the closure where the flake is and
+      # pushes it, and that command is how.
       devShells.${system}.default = pkgs.mkShell {
         packages = with pkgs; [
           age
           jq
+          nixos-rebuild
           nixpkgs-fmt
           sops
           ssh-to-age
