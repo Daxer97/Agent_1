@@ -263,6 +263,14 @@ let
 
     vault {
       address = "https://${cfg.secretStore.address}:${toString cfg.secretStore.port}"
+
+      # The listener the store issues for itself is signed by nobody the
+      # guests know, so the agent is told what to verify it against. Absent
+      # this, every agent fails at TLS — before authenticating, before
+      # rendering anything, and with a message about the handshake rather
+      # than about a certificate nobody gave it.
+      ${lib.optionalString (cfg.secretStore.caCertificate != null)
+        ''ca_cert = "${cfg.secretStore.caCertificate}"''}
       retry { num_retries = ${toString cfg.secretStore.retries} }
     }
 

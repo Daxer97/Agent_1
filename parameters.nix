@@ -366,6 +366,19 @@
       keyShares = 3;
       keyThreshold = 2;
 
+      # The store issues its own certificate on first start and publishes the
+      # public half at /run/openbao/cert.pem. Copy it into the repository and
+      # name it here, and every agent verifies the listener against it:
+      #
+      #     scp root@10.102.0.14:/run/openbao/cert.pem config/openbao/cert.pem
+      #     git add config/openbao/cert.pem
+      #
+      # It is public material, so the Nix store is the right place for it.
+      # Left null the agents use the system trust store, which the self-signed
+      # certificate is not in — and the failure is a TLS error that does not
+      # mention a certificate.
+      caCertificate = null;
+
       # On local-lvm, deliberately not on the pool of the memory guest and on
       # a filesystem separate from the observability volume: documentary
       # evidence of TC-25 must not compete for space with what it audits.

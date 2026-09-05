@@ -753,10 +753,25 @@ public half, which is published where it can be read:
 scp root@"$SEC_ADDR":/run/openbao/cert.pem ./openbao-cert.pem
 ```
 
-That file is what verifies the listener: `BAO_CACERT` below, and later the
-agents of the other guests. Replacing the certificate with one from an
-internal authority is a matter of stopping the unit and writing the pair into
-`/var/lib/openbao/tls`; the store keeps whatever it finds there.
+That file is what verifies the listener — `BAO_CACERT` below, and the agents
+of every guest. For the agents it has to be declared, not copied by hand:
+
+```sh
+mkdir -p config/openbao
+cp ./openbao-cert.pem config/openbao/cert.pem
+git add config/openbao/cert.pem
+"${EDITOR:-vi}" parameters.nix       # secretStore.caCertificate = ./config/openbao/cert.pem
+```
+
+It is public material, so the Nix store is the right place for it: from there
+it travels in the closure of each guest like everything else they are built
+from. Left null, the agents verify against the system trust store, which this
+certificate is not in — and they fail at the handshake, with a message about
+TLS rather than about a certificate nobody gave them.
+
+Replacing the certificate with one from an internal authority is a matter of
+stopping the unit and writing the pair into `/var/lib/openbao/tls`; the store
+keeps whatever it finds there.
 
 #### Initialising the store
 

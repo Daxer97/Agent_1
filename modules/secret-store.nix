@@ -51,17 +51,14 @@ in
         api_addr = "https://${store.address}:${toString store.port}";
         cluster_addr = "https://${store.address}:${toString store.clusterPort}";
 
-        # Key material must not reach swap, and mlock is not what keeps it
-        # off here. The NixOS module runs the store as a dynamic user with an
-        # empty capability bounding set, so IPC_LOCK cannot be granted to it;
-        # openbao refuses to start with this set to false and says so — the
-        # message names the line and recommends removing it.
-        #
-        # What replaces it is stronger for this unit, because it does not
-        # depend on a syscall succeeding: the same module sets
-        # MemorySwapMax=0, so the kernel never swaps this cgroup's memory at
-        # all, whether or not the process asked for it.
-        disable_mlock = true;
+        # There is deliberately no disable_mlock here. The field is gone in
+        # openbao 2.4 — false is refused with a message naming the line, true
+        # is accepted and warned about as unknown — and what it was for is
+        # provided by the unit: the NixOS module sets MemorySwapMax=0, so the
+        # kernel never swaps this cgroup's memory, which does not depend on a
+        # process holding IPC_LOCK. That capability is unreachable anyway,
+        # since the module runs the store under a dynamic user with an empty
+        # capability bounding set.
 
         log_level = cfg.observability.logLevel;
       };

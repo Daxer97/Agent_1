@@ -516,6 +516,26 @@ in
         description = "Shares required to unseal.";
       };
 
+      caCertificate = mkOption {
+        type = types.nullOr types.path;
+        default = null;
+        description = ''
+          Certificate the agents verify the store's listener against.
+
+          The store issues its own on first start, self-signed, and publishes
+          the public half at /run/openbao/cert.pem. Copying that file into
+          this repository and naming it here is what makes the trust
+          declarative: it then travels in the closure of every guest, like
+          everything else they are built from.
+
+          Null leaves the agents with the system trust store, which is right
+          only when the listener carries a certificate from an authority
+          those guests already trust. Against the self-signed one they fail
+          to connect, and the failure is a TLS error that does not mention a
+          certificate.
+        '';
+      };
+
       auditPath = mkOption {
         type = types.path;
         description = ''
