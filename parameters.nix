@@ -624,7 +624,7 @@
       # Must stay DIFFERENT from auxiliaryDefault: were they equal, the silent
       # fallback of an auxiliary slot onto the main one would be invisible in
       # the per-model metrics.
-      main = "anthropic/claude-sonnet-5";
+      main = "anthropic/claude-opus-5";
 
       # Selectivity is left to the gateway's own gate: no custom router
       # upstream of it.
@@ -632,7 +632,9 @@
 
       # The cost multiplier of R-12 — up to nine concurrent leaf workers.
       # Putting a frontier model here multiplies by five exactly the term that
-      # dominates the cost objective.
+      # dominates the cost objective: per token, the frontier tier is five
+      # times this one, against a nine-way fan-out. The main slot is one call
+      # per turn and is where the promotion buys something; this is not.
       delegation = "anthropic/claude-haiku-4.5";
 
       # Thirteen auxiliary slots. A non-conforming identifier produces no
@@ -650,7 +652,12 @@
       # A judge weaker than the model being judged produces an evaluation that
       # measures the judge. Its spend is labelled separately and excluded from
       # the cost-per-task figure (DEC-24).
-      evaluation = "anthropic/claude-sonnet-5";
+      #
+      # It therefore moves with `main`, and is the reason raising the main slot
+      # is never a one-line change: leaving this on the model that main was
+      # promoted from silently turns the objective's own instrument into the
+      # weaker party.
+      evaluation = "anthropic/claude-opus-5";
 
       # The loop must be deterministic in its tool calling, not creative.
       temperatureMain = 0.2;
