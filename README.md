@@ -928,8 +928,16 @@ for role in broker hermes memory ingress eval; do
     secret_id_ttl=0 bind_secret_id=true
 done
 
-bao audit enable file file_path="$AUDIT/openbao-audit.log"
+bao audit list          # the device is declared, not enabled here
 ```
+
+The audit device is not created by this phase. `bao audit enable` is refused
+by the store — "cannot enable audit device via API; use declarative,
+config-based audit device management instead" — and the device is declared in
+`modules/secret-store.nix`, created on each start of the unit. `bao audit
+list` must show it at `file/` before the gate, because the gate's evidence is
+an entry in that log. If it is empty, the guest is running a configuration
+built before the device was declared: rebuild it, unseal, and look again.
 
 The policies are built where the flake is and written where the store is, so
 they have to cross. They are public — they are in this repository — so they

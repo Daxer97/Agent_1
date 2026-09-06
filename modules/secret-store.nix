@@ -60,6 +60,31 @@ in
         # since the module runs the store under a dynamic user with an empty
         # capability bounding set.
 
+        # The audit device, declared rather than enabled.
+        #
+        # openbao 2.4 refuses `bao audit enable`: "cannot enable audit device
+        # via API; use declarative, config-based audit device management
+        # instead". The device belongs in the configuration, which is where
+        # everything else about this store already is — and it is created on
+        # each start and on SIGHUP, so it cannot be forgotten on a rebuild or
+        # left behind by a restore.
+        #
+        # The shape is a list of one-entry sets keyed by type, then by the
+        # path the device takes in the root namespace. "file" for both: the
+        # type, and the path `bao audit enable file` would itself have used,
+        # so `bao audit list` reads the same either way.
+        #
+        # This is the evidence the central invariant is measured against — the
+        # refusal recorded when the agentic identity reaches for an inference
+        # credential — so it is not optional and not something an operator
+        # enables by hand afterwards.
+        audit = [{
+          file.file = {
+            description = "Every request and response, granted or denied.";
+            options.file_path = "${store.auditPath}/openbao-audit.log";
+          };
+        }];
+
         log_level = cfg.observability.logLevel;
       };
     };
