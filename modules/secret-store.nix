@@ -64,6 +64,25 @@ in
       };
     };
 
+    # Every `bao` invocation on this guest needs the address and the
+    # certificate, and an SSH session inherits neither. Without them the CLI
+    # goes to https://127.0.0.1:8200 against the system trust store, which
+    # this self-signed certificate is not in — so the first command of any
+    # session fails on the certificate rather than on what it was asked to do.
+    #
+    # Neither value is a secret: the address is in the inventory and the
+    # certificate is the public half, published deliberately. What must never
+    # live here is BAO_TOKEN, which is an identity and belongs to the shell
+    # that read it.
+    #
+    # Manual unsealing makes this a recurring cost rather than a one-off: an
+    # operator opens a session on this guest at every reboot of it, and that
+    # is exactly the session in which the store is not yet usable.
+    environment.variables = {
+      BAO_ADDR = "https://${store.address}:${toString store.port}";
+      BAO_CACERT = "/run/openbao/cert.pem";
+    };
+
     # There is no openbao account to own anything: the module runs the store
     # under a dynamic user, which exists only while the unit does. Rules
     # naming one are refused by systemd-tmpfiles with "unknown user", and the
